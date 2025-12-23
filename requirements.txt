@@ -1,0 +1,16 @@
+# Data & F1
+fastf1>=3.3.0
+pandas>=2.1.0,<2.3.0
+numpy>=1.26.0
+
+# Kafka
+kafka-python>=2.0.2
+
+# Flask Backend
+flask>=3.0.0
+flask-socketio>=5.3.5
+flask-cors>=4.0.0
+python-socketio>=5.11.0
+
+# Redis
+redis>=5.0.0
