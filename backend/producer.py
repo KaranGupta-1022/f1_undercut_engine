@@ -2,12 +2,16 @@ import json
 import time
 import pandas as pd
 import fastf1 
+from  pathlib import Path
 from kafka import KafkaProducer 
 
-fastf1.Cache.enable_cache("cache")
+project_root = Path(__file__).resolve().parent.parent
+cache_dir = project_root / "cache"
+cache_dir.mkdir(parents=True, exist_ok=True)
+fastf1.Cache.enable_cache(str(cache_dir))
 
 class RaceSimulator:
-    def __init__(self, year=2024, event="Monaco", session_type="R", bootstrap_servers="localhost:9092", delay=0.5):
+    def __init__(self, year=2024, event="Monaco", session_type="R", bootstrap_servers="localhost:9092", delay=1.0):
         self.delay = delay
         self.producer = KafkaProducer(
             bootstrap_servers=bootstrap_servers,
@@ -21,6 +25,10 @@ class RaceSimulator:
         
     def stream_race(self, topic="f1-telemetry", max_laps=None):
         sent = 0
+        unique_drivers = set()
+        total_laps = len(self.laps)
+        print(f"Total laps to stream: {total_laps}")
+        
         try:
             for _, lap in self.laps.iterrows():
                 payload = {
@@ -33,17 +41,27 @@ class RaceSimulator:
                     "Position": int(lap.get("Position")) if not pd.isna(lap.get("Position")) else None,
                     "SessionName": {"EventName": getattr(self.session.event, "EventName", None)}
                 }
-                
+                unique_drivers.add(payload['Driver'])
                 self.producer.send(topic, value=payload)
                 print(f"Sent Lap: Driver={payload['Driver']}, LapNumber={payload['LapNumber']}, Compound={payload['Compound']}")
                 sent += 1
+                
                 if max_laps and sent >= max_laps:
                     print(f"Reached max laps limit: {max_laps}. Stopping simulation.")
                     break
+                
+                if sent % 100 == 0: 
+                    target = max_laps if max_laps else total_laps
+                    progress = (sent / target) * 100
+                    print(f"Progress: {sent} laps sent ({progress:.1f}%)")
                 time.sleep(self.delay)
         except KeyboardInterrupt:
             print("Ctrl+C -> Interrupted by user.")
         finally:
+            print(f"\n Summary:")
+            print(f"   Total Laps Sent: {sent}")
+            print(f"   Unique drivers: {len(unique_drivers)}")  # ← Add this
+            print(f"   Drivers: {sorted(unique_drivers)}")
             print("Flushing producer...")
             self.producer.flush()
             self.producer.close()
@@ -51,5 +69,5 @@ class RaceSimulator:
                 
         
 if __name__ == "__main__":
-    sim = RaceSimulator(delay=0.3)
-    sim.stream_race(max_laps=50)
+    sim = RaceSimulator(delay=0.1)
+    sim.stream_race(max_laps=100)

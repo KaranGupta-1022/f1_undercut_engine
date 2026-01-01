@@ -214,3 +214,6 @@ cache/
 # Frontend
 node_modules/
 frontend/build/
+
+# Commands to run the project
+commands.txt
