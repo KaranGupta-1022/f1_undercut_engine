@@ -39,7 +39,9 @@ class RaceSimulator:
                     "TyreLife": int(lap.get("TyreLife")) if "TyreLife" in lap.index and not pd.isna(lap.get("TyreLife")) else None,
                     "Stint": int(lap.get("Stint")) if "Stint" in lap.index and not pd.isna(lap.get("Stint")) else None,
                     "Position": int(lap.get("Position")) if not pd.isna(lap.get("Position")) else None,
-                    "SessionName": {"EventName": getattr(self.session.event, "EventName", None)}
+                    "SessionName": {"EventName": getattr(self.session.event, "EventName", None)},
+                    "Weather": lap.get_weather_data() if hasattr(lap, 'get_weather_data') else {},
+                    "TRACK_STATUS": str(self.session.get_track_status(lap["SafetyCar"])) if "SafetyCar" in lap.index else None
                 }
                 unique_drivers.add(payload['Driver'])
                 self.producer.send(topic, value=payload)
@@ -70,4 +72,4 @@ class RaceSimulator:
         
 if __name__ == "__main__":
     sim = RaceSimulator(delay=0.1)
-    sim.stream_race(max_laps=100)
+    sim.stream_race(max_laps=50)
