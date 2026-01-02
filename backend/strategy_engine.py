@@ -206,4 +206,113 @@ class UndercutEngine:
     # reason  (str): explanation 
     # pit_loss (float): estimated pit stop loss time
     def predict_undercut_window(self, driver_ahead: str, driver_behind: str) -> Optional[dict]:
+        if driver_ahead not in self.driver_state or driver_behind not in self.driver_state: 
+            return None
+            
+        ahead = self.driver_state[driver_ahead]
+        behind = self.driver_state[driver_behind]
         
+        # Checking that we have necessaty info 
+        if not ahead["lap_times"] or not behind["lap_times"]:
+            return {
+                "viable": False,
+                "time_delta": 0.0,
+                "confidence": 0.0,
+                "pit_loss": 0.0,
+                "reason": "Insufficient lap time data"
+            }
+            
+        # Calculating the pit loss from track conditions
+        pit_loss = self.SAFETY_CAR_PIT_LOSS if self.is_safety_car_period() else self.PIT_LOSS
+        
+        # Getting the degradation rates
+        ahead_degradation = self.DEGRADATION_RATES.get(ahead["compound"], 0.05)
+        behind_degradation = self.DEGRADATION_RATES.get(behind["compound"], 0.05)
+        
+        # Apply weather multipliers
+        ahead_weather_mult = self.get_degradation_multiplier(ahead["weather"])
+        behind_weather_mult = self.get_degradation_multiplier(behind["weather"])
+        
+        ahead_adjusted *= ahead_weather_mult
+        behind_adjusted *= behind_weather_mult
+        
+        # Project ahead's next lap (with degradation)
+        ahead_projected = ahead["current_pace"] + (ahead["tyre_age"] * ahead_degradation)
+        
+        # Project behind's lap after pit stop
+        behind_best = min(behind["lap_times"][-5:])
+        pit_loss_per_lap = pit_loss / self.AMORTIZATION_LAPS
+        behind_projected = behind_best + pit_loss_per_lap - self.FRESH_TIRE_ADVANTAGE
+        
+        # Calculate time delta
+        time_delta = ahead_projected - behind_projected
+        
+        # Viability check
+        if self.is_safety_car_period():
+            viable_theshold = self.SAFETY_CAR_THRESHOLD
+            viable = time_delta > viable_theshold
+        else:
+            # Normal conditions
+            viable = time_delta > 0.0
+            
+        confidence = min(len(behind["lap_times"]) / 5.0, 1.0)
+        
+        # Reasoning
+        reason = ""
+        if self.is_safety_car_period():
+            reason = "Safety car active. "
+        elif ahead["weather"].get("rainfall"):
+            reason = "Rain conditions affecting pace. "
+        elif ahead["weather"].get("track_temp", 0) > 40:
+            reason = "High track temperature."
+        else:
+            reason = "Normal racing conditions."
+            
+        return {
+            "viable": viable,
+            "time_delta": round(time_delta, 2),
+            "confidence": round(confidence, 2),
+            "pit_loss": round(pit_loss, 1),
+            "ahead_projected": round(ahead_projected, 2),
+            "behind_projected": round(behind_projected, 2),
+            "ahead_degradation": round(ahead_degradation, 4),
+            "ahead_tire_age": ahead["tyre_age"],
+            "ahead_compound": ahead["compound"],
+            "weather_condition": self.get_weather_condition(ahead["weather"]),
+            "track_status": self.track_status,
+            "recommendation": "BOX NOW" if viable else "STAY OUT",
+            "reason": reason
+        }
+        
+    # Recommendation during safety car period.
+    # Pit if gap to leader is within threshold 
+    def get_safety_car_recommendation(self, driver_behind: str, gap_to_leader: float) -> Optional[dict]:
+        if driver_behind not in self.driver_state:
+            return None
+        
+        behind = self.driver_state[driver_behind]
+        
+        # During safety car, pit if gap to leader is within threshold
+        if self.is_safety_car_period() and gap_to_leader <= self.SAFETY_CAR_THRESHOLD:
+            return {
+                "viable": True,
+                "recommendation": "BOX NOW (Safety Car window)",
+                "reason": f"Safety car gap threshold ({gap_to_leader:.2f}s < {self.SAFETY_CAR_THRESHOLD}s)",
+                "pit_loss": self.SAFETY_CAR_PIT_LOSS
+            }
+            
+        return None
+    
+    # Return a list of all drivers
+    def get_all_drivers(self)-> List[str]:
+        return list(self.driver_state.keys())
+    
+    # Get driver state
+    def get_driver_state(self, driver: str) -> Optional[dict]:
+        return self.driver_state.get(driver, None)
+    
+    # Clear all driver state
+    def reset(self):
+        self.driver_state.clear()
+        self.weather_data.clear()
+        self.track_status = "GREEN"
