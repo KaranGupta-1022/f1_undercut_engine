@@ -4,9 +4,20 @@ from typing import Dict, Optional, List
 class UndercutEngine:
     # Tire degradation rates for each compound (seconds per lap)
     DEGRADATION_RATES = {
-        "Soft": 1.5,
-        "Medium": 1.0,
-        "Hard": 0.7
+        "SOFT": 1.5,
+        "MEDIUM": 1.0,
+        "HARD": 0.7
+    }
+    
+    # Tire compound pace advantage (seconds per lap)
+    # How much faster one compound is vs another
+    COMPOUND_ADVANTAGE = {
+        ("SOFT", "MEDIUM"): 0.5,   # SOFT is 0.5s/lap faster than MEDIUM
+        ("SOFT", "HARD"): 0.8,     # SOFT is 0.8s/lap faster than HARD
+        ("MEDIUM", "HARD"): 0.3,   # MEDIUM is 0.3s/lap faster than HARD
+        ("MEDIUM", "SOFT"): -0.5,  # MEDIUM is 0.5s/lap slower than SOFT
+        ("HARD", "SOFT"): -0.8,    # HARD is 0.8s/lap slower than SOFT
+        ("HARD", "MEDIUM"): -0.3,  # HARD is 0.3s/lap slower than MEDIUM
     }
     
     # Pit stop times (in seconds) 
@@ -91,17 +102,24 @@ class UndercutEngine:
     def get_weather_condition(self, weather_dict: Dict) -> str:
         if not weather_dict:
             return "dry"
-        
-        rainfall = weather_dict.get("Rainfall", False)
-        if rainfall: 
+
+        # Accept both lowercase and capitalized keys (tests provide "Rainfall"/"TrackTemp")
+        rainfall = weather_dict.get("rainfall")
+        if rainfall is None:
+            rainfall = weather_dict.get("Rainfall", False)
+        if rainfall:
             return "rain"
-        
-        track_temp = weather_dict.get("TrackTemp")
-        if track_temp and track_temp >= 40:
-            return "hot"
-        elif track_temp and track_temp <= 30:
-            return "cool"
-        
+
+        track_temp = weather_dict.get("tracktemp")
+        if track_temp is None:
+            track_temp = weather_dict.get("TrackTemp")
+
+        if track_temp is not None:
+            if track_temp >= 40:
+                return "hot"
+            if track_temp <= 30:
+                return "cool"
+
         return "dry"
     
     # Get tire degradiction rate based on weather
@@ -112,6 +130,17 @@ class UndercutEngine:
     # Check if safety car is active
     def is_safety_car_active(self) -> bool:
         return self.track_status in ["SAFETY_CAR", "VSC Deployed"]
+    
+    # Get pace advantage when comparing different tire compounds
+    # Returns pace advantage (in seconds) of compound_a over compound_b.
+    # #Positive = compound_a is faster
+    # Negative = compound_a is slower
+    def get_compound_advantage(self, compound_a: str, compound_b: str) -> float:
+        if not compound_a or not compound_b:
+            return 0.0
+        
+        key = (compound_a.upper(), compound_b.upper())
+        return self.COMPOUND_ADVANTAGE.get(key, 0.0)
     
     # Update track status from code
     def update_track_status(self, track_status_code: str):
@@ -151,7 +180,8 @@ class UndercutEngine:
         state["lap_number"] = lap_number if lap_number else state["lap_number"]
         state["position"] = position if position else state["position"]
         state["compound"] = compound if compound else state["compound"]
-        state["track_status"] = track_status if track_status else state["track_status"]
+        decoded = self.TRACK_STATUS_CODES.get(str(track_status), "GREEN") if track_status is not None else state["track_status"]
+        state["track_status"] = decoded
         state["stint"] = stint if stint else state["stint"]
         
         # Parse and store weather data
@@ -183,7 +213,7 @@ class UndercutEngine:
             return 0.0
     
         current_pace = state["current_pace"]
-        degradation_rate = self.DEGRADATION_RATES.get(state["compound"], 0.05)
+        degradation_rate = self.DEGRADATION_RATES.get((state.get("compound") or "").upper(), 0.05)
         weather_multiplier = self.get_degradation_multiplier(state["weather"])
         adjusted_degradation = degradation_rate * weather_multiplier
         
@@ -212,7 +242,21 @@ class UndercutEngine:
         ahead = self.driver_state[driver_ahead]
         behind = self.driver_state[driver_behind]
         
-        # Checking that we have necessaty info 
+        # POSITION VALIDATION: Ensure ahead is actually ahead
+        ahead_pos = ahead.get("position")
+        behind_pos = behind.get("position")
+        
+        if ahead_pos is not None and behind_pos is not None:
+            if ahead_pos >= behind_pos:
+                return {
+                    "viable": False,
+                    "time_delta": 0.0,
+                    "confidence": 0.0,
+                    "pit_loss": 0.0,
+                    "reason": f"Position error: {driver_ahead} (P{ahead_pos}) is not ahead of {driver_behind} (P{behind_pos})"
+                }
+        
+        # Checking that we have necessary info 
         if not ahead["lap_times"] or not behind["lap_times"]:
             return {
                 "viable": False,
@@ -223,18 +267,18 @@ class UndercutEngine:
             }
             
         # Calculating the pit loss from track conditions
-        pit_loss = self.SAFETY_CAR_PIT_LOSS if self.is_safety_car_period() else self.PIT_LOSS
+        pit_loss = self.SAFETY_CAR_PIT_LOSS if self.is_safety_car_active() else self.PIT_LOSS
         
         # Getting the degradation rates
-        ahead_degradation = self.DEGRADATION_RATES.get(ahead["compound"], 0.05)
-        behind_degradation = self.DEGRADATION_RATES.get(behind["compound"], 0.05)
+        ahead_degradation = self.DEGRADATION_RATES.get((ahead.get("compound") or "").upper(), 0.05)
+        behind_degradation = self.DEGRADATION_RATES.get((behind.get("compound") or "").upper(), 0.05)
         
         # Apply weather multipliers
         ahead_weather_mult = self.get_degradation_multiplier(ahead["weather"])
         behind_weather_mult = self.get_degradation_multiplier(behind["weather"])
         
-        ahead_adjusted *= ahead_weather_mult
-        behind_adjusted *= behind_weather_mult
+        ahead_degradation *= ahead_weather_mult
+        behind_degradation *= behind_weather_mult
         
         # Project ahead's next lap (with degradation)
         ahead_projected = ahead["current_pace"] + (ahead["tyre_age"] * ahead_degradation)
@@ -242,13 +286,24 @@ class UndercutEngine:
         # Project behind's lap after pit stop
         behind_best = min(behind["lap_times"][-5:])
         pit_loss_per_lap = pit_loss / self.AMORTIZATION_LAPS
-        behind_projected = behind_best + pit_loss_per_lap - self.FRESH_TIRE_ADVANTAGE
+        
+        # Account for compound differences
+        ahead_compound = ahead.get("compound", "MEDIUM")
+        behind_compound = behind.get("compound", "MEDIUM")
+        
+        # Calculate compound advantage (if behind switches to faster compound)
+        compound_advantage = self.get_compound_advantage(behind_compound, ahead_compound)
+        
+        behind_projected = (behind_best + 
+                           pit_loss_per_lap - 
+                           self.FRESH_TIRE_ADVANTAGE - 
+                           compound_advantage)
         
         # Calculate time delta
         time_delta = ahead_projected - behind_projected
         
         # Viability check
-        if self.is_safety_car_period():
+        if self.is_safety_car_active():
             viable_theshold = self.SAFETY_CAR_THRESHOLD
             viable = time_delta > viable_theshold
         else:
@@ -259,7 +314,7 @@ class UndercutEngine:
         
         # Reasoning
         reason = ""
-        if self.is_safety_car_period():
+        if self.is_safety_car_active():
             reason = "Safety car active. "
         elif ahead["weather"].get("rainfall"):
             reason = "Rain conditions affecting pace. "
@@ -277,7 +332,9 @@ class UndercutEngine:
             "behind_projected": round(behind_projected, 2),
             "ahead_degradation": round(ahead_degradation, 4),
             "ahead_tire_age": ahead["tyre_age"],
-            "ahead_compound": ahead["compound"],
+            "ahead_compound": ahead_compound,
+            "behind_compound": behind_compound,
+            "compound_advantage": round(compound_advantage, 2),
             "weather_condition": self.get_weather_condition(ahead["weather"]),
             "track_status": self.track_status,
             "recommendation": "BOX NOW" if viable else "STAY OUT",
@@ -293,7 +350,7 @@ class UndercutEngine:
         behind = self.driver_state[driver_behind]
         
         # During safety car, pit if gap to leader is within threshold
-        if self.is_safety_car_period() and gap_to_leader <= self.SAFETY_CAR_THRESHOLD:
+        if self.is_safety_car_active() and gap_to_leader <= self.SAFETY_CAR_THRESHOLD:
             return {
                 "viable": True,
                 "recommendation": "BOX NOW (Safety Car window)",
@@ -314,5 +371,5 @@ class UndercutEngine:
     # Clear all driver state
     def reset(self):
         self.driver_state.clear()
-        self.weather_data.clear()
+        self.weather.clear()
         self.track_status = "GREEN"
