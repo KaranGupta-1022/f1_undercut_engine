@@ -69,6 +69,19 @@ class UndercutEngine:
             return lap_time.total_seconds()
         if isinstance(lap_time, str):
             try:
+                # Handle "0 days HH:MM:SS.ffffff" format from timedelta
+                if 'days' in lap_time:
+                    parts = lap_time.split()
+                    if len(parts) >= 3:
+                        days = int(parts[0])
+                        time_str = parts[2]
+                        time_parts = time_str.split(':')
+                        hours = int(time_parts[0])
+                        minutes = int(time_parts[1])
+                        seconds = float(time_parts[2])
+                        return days * 86400 + hours * 3600 + minutes * 60 + seconds
+                
+                # Handle "MM:SS.fff" format
                 parts = lap_time.split(":")
                 if len(parts) == 3:
                     hours, minutes, seconds = parts
@@ -84,6 +97,10 @@ class UndercutEngine:
     
     # Parase and normalize weather data
     def parse_weather_data(self, weather_dict: dict) -> dict:
+        # Handle non-dict input (e.g., string, None, etc.)
+        if not isinstance(weather_dict, dict):
+            return {}
+        
         if not weather_dict:
             return {}
         

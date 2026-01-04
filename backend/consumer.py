@@ -70,17 +70,17 @@ class ConsumerWithStrategy:
             state = self.engine.driver_state.get(driver)
             if state:
                 cache_state = {
-                    "lap_number": state['lap_number'],
-                    "tyre_age": state['tyre_age'],
-                    "compound": state['compound'],
-                    "position": state['position'],
-                    "current_pace": state['current_pace'],
-                    "stint": state.get('stint'),
-                    "last_lap_time": state["lap_times"][-1] if state["lap_times"] else None
+                    "lap_number": str(state['lap_number']),
+                    "tyre_age": str(state['tyre_age']),
+                    "compound": state['compound'] or "UNKNOWN",
+                    "position": str(state['position']) if state['position'] else "0",
+                    "current_pace": str(state['current_pace']) if state['current_pace'] else "0",
+                    "stint": str(state.get('stint')) if state.get('stint') else "0",
+                    "last_lap_time": str(state["lap_times"][-1]) if state["lap_times"] else "0"
                 }
                 
                 self.redis_client.hset(f"f1:driver:{driver}", mapping=cache_state)
-                self.redis_client.expire(f"f1:driver:{driver}", 3600) # 1 hour expiration
+                self.redis_client.expire(f"f1:driver:{driver}", 3600)
                 
         except Exception as e:
             logger.error(f"Failed to cache driver state for {driver}: {e}")
