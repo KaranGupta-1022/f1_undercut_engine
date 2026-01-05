@@ -173,6 +173,7 @@ class UndercutEngine:
         stint = lap_data.get("Stint")
         weather = lap_data.get("Weather", {})
         track_status = lap_data.get("TRACK_STATUS", "GREEN")
+        lap_seconds = self.lap_time_to_seconds(lap_time)
         
         # Update global track status
         if track_status and track_status != "GREEN":
@@ -186,10 +187,12 @@ class UndercutEngine:
                 "position": position,
                 "lap_times": [],
                 "current_pace": 0.0,
+                "cumulative_time": 0.0,
                 "weather": {},
                 "track_status": "GREEN",
                 "stint": 1,
-                "gap_to_leader": 0.0
+                "gap_to_leader": 0.0,
+                "gap_ahead": 0.0
             }
             
         # Update driver state
@@ -210,15 +213,40 @@ class UndercutEngine:
             state["tyre_age"] = tyre_life
             
         # Add lap times 
-        lap_seconds = self.lap_time_to_seconds(lap_time)
         if lap_seconds and lap_seconds > 0:
             state["lap_times"].append(lap_seconds)
             if len(state["lap_times"]) > 10:
                 state["lap_times"] = state["lap_times"][-10:]
             
+            # Update cumulative time
+            state["cumulative_time"] += lap_seconds
+            
             # Calculate current pace as average of last 3 laps
             recent_laps = state["lap_times"][-3:]
             state["current_pace"] = sum(recent_laps) / len(recent_laps)
+    
+    # Calculate gap between consecutive drivers based on cumulative time
+    def calculate_gap_ahead(self, driver_ahead: str, driver_behind: str) -> float:
+    
+        if driver_ahead not in self.driver_state or driver_behind not in self.driver_state:
+            return 0.0
+        
+        ahead = self.driver_state[driver_ahead]
+        behind = self.driver_state[driver_behind]
+        
+        # If not on same lap, gap is unreliable
+        ahead_lap = ahead.get("lap_number", 0)
+        behind_lap = behind.get("lap_number", 0)
+        
+        if ahead_lap != behind_lap:
+            # Approximate: 1 lap = ~90 seconds (average F1 lap)
+            lap_diff = abs(ahead_lap - behind_lap)
+            return lap_diff * 90.0  # Very rough estimate
+        
+        # Same lap - use cumulative time difference
+        gap = behind.get("cumulative_time", 0.0) - ahead.get("cumulative_time", 0.0)
+        
+        return max(gap, 0.0)  # Gap can't be negative
             
     # Calculate projected pace for a driver (Accounting for tire degradation and waeather)
     def calculate_projected_pace(self, driver: str, future_laps: int = 1) -> Optional[float]:
@@ -272,6 +300,20 @@ class UndercutEngine:
                     "pit_loss": 0.0,
                     "reason": f"Position error: {driver_ahead} (P{ahead_pos}) is not ahead of {driver_behind} (P{behind_pos})"
                 }
+                
+         # LAP NUMBER VALIDATION: Warn if drivers are on different laps (lapped cars)
+        ahead_lap = ahead.get("lap_number", 0)
+        behind_lap = behind.get("lap_number", 0)
+        lap_difference = abs(ahead_lap - behind_lap)
+        
+        if lap_difference > 1:
+            return {
+                "viable": False,
+                "time_delta": 0.0,
+                "confidence": 0.0,
+                "pit_loss": 0.0,
+                "reason": f"Lap difference too large: {driver_ahead} on Lap {ahead_lap}, {driver_behind} on Lap {behind_lap} ({lap_difference} laps apart)"
+            }
         
         # Checking that we have necessary info 
         if not ahead["lap_times"] or not behind["lap_times"]:
@@ -316,16 +358,48 @@ class UndercutEngine:
                            self.FRESH_TIRE_ADVANTAGE - 
                            compound_advantage)
         
-        # Calculate time delta
-        time_delta = ahead_projected - behind_projected
+        # Calculate time delta (per lap advantage)
+        time_delta_per_lap = ahead_projected - behind_projected
         
-        # Viability check
-        if self.is_safety_car_active():
-            viable_theshold = self.SAFETY_CAR_THRESHOLD
-            viable = time_delta > viable_theshold
+        # Calculate actual gap between drivers
+        current_gap = self.calculate_gap_ahead(driver_ahead, driver_behind)
+        
+        # CRITICAL: Check if gap is sufficient for undercut
+        # Behind driver needs to overcome: current_gap + pit_loss
+        # Using their per-lap advantage over multiple laps
+        
+        # Estimate laps needed to close gap after pit stop
+        if time_delta_per_lap > 0:
+            # Total deficit after pit stop
+            total_deficit = current_gap + pit_loss
+            
+            # Laps needed to overcome deficit
+            laps_to_overcome = total_deficit / time_delta_per_lap
         else:
-            # Normal conditions
-            viable = time_delta > 0.0
+            laps_to_overcome = 999  # Can't overcome (no advantage)
+        
+        # For undercut to work: need to overcome deficit within reasonable laps
+        # F1 races typically have 10-20 laps left for strategy
+        max_recovery_laps = 15
+        
+        # Final time delta considers both per-lap advantage and gap
+        time_delta = time_delta_per_lap 
+        
+        # Viability check - must consider both pace AND gap
+        if self.is_safety_car_active():
+            # During safety car, gap becomes less important (field bunched up)
+            viable_threshold = self.SAFETY_CAR_THRESHOLD
+            viable = time_delta_per_lap > viable_threshold and laps_to_overcome < 20
+        else:
+            # Normal conditions: need positive time delta AND achievable recovery
+            viable = (time_delta_per_lap > 0.0 and 
+                     laps_to_overcome <= max_recovery_laps and
+                     current_gap > 3.0)  # Minimum 3 second gap required
+            
+            # If gap is very small (<3s), undercut is too risky
+            if current_gap < 3.0:
+                reason = f"Gap too small ({current_gap:.1f}s) - risk of traffic after pit stop."
+                viable = False
             
         confidence = min(len(behind["lap_times"]) / 5.0, 1.0)
         
@@ -342,7 +416,9 @@ class UndercutEngine:
             
         return {
             "viable": viable,
-            "time_delta": round(time_delta, 2),
+            "time_delta": round(time_delta_per_lap, 2),
+            "current_gap": round(current_gap, 2),
+            "laps_to_overcome": round(laps_to_overcome, 1) if laps_to_overcome < 999 else "N/A",
             "confidence": round(confidence, 2),
             "pit_loss": round(pit_loss, 1),
             "ahead_projected": round(ahead_projected, 2),

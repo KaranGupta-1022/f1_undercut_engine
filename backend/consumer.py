@@ -9,7 +9,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("predictions.log"),
+        logging.FileHandler("predictions.log",  mode='w', encoding='utf-8'),  # ← Add encoding
         logging.StreamHandler()
     ]
 )
@@ -40,10 +40,12 @@ class ConsumerWithStrategy:
             self.redis_client = None
         
         self.engine = UndercutEngine()
-        self.lap_count = 0
-        self.check_interval = 10
+        self.message_count = 0  # Total messages received
+        self.current_race_lap = 0  # Current lap number in the race
+        self.check_interval = 5  # Check every 5 laps
         self.log_file = log_file
         self.race_session = None
+        self.last_checked_lap = 0  # Track when we last checked for undercuts
 
         
         logger.info("=== F1 Undercut Strategy Engine Started ===")
@@ -91,7 +93,7 @@ class ConsumerWithStrategy:
             return 
         
         try:
-            cache_key = f"f1:prediction:{ahead}:{behind}:{self.lap_count}"
+            cache_key = f"f1:prediction:{ahead}:{behind}:{self.current_race_lap}"
             prediction_data = {
                 "timestamp": datetime.now().isoformat(),
                 "viable": str(result['viable']),
@@ -108,7 +110,7 @@ class ConsumerWithStrategy:
             # Also store in a sorted set for quick retrieval of recent predictions
             self.redis_client.zadd(
                 'f1:predictions:recent',
-                {f'{ahead}:{behind}': self.lap_count}
+                {f'{ahead}:{behind}': self.current_race_lap}
             )
             
         except Exception as e:
@@ -123,14 +125,25 @@ class ConsumerWithStrategy:
         for driver in drivers:
             state = self.engine.driver_state.get(driver)
             if state:
-                position = state.get("position", 999)
-                driver_positions.append((driver, position))
+                position = state.get("position")
                 
-        # Sort by position in ascending order
-        driver_positions.sort(key=lambda x: x[1])
-        return [driver for _, driver in driver_positions]
+                # Handle None positions (retired/DNF drivers)
+                # Treat None as 999 so they sort to the end
+                if position is None:
+                    position = 999
+                    
+                driver_positions.append((driver, position))
+        
+        # Filter out drivers with no valid position data
+        # (those still at 999 - haven't started or retired)
+        valid_positions = [(d, p) for d, p in driver_positions if p < 900]
+        
+        # Sort by position (second element of tuple) in ascending order
+        valid_positions.sort(key=lambda x: x[1])
+        
+        return [driver for driver, _ in valid_positions]
     
-    # Check for undercut between consecutive drivers
+    # Check for undercut between consecutive driver
     def check_undercut_opportunities(self):
         sorted_drivers = self.get_sorted_drivers_by_position()
         
@@ -138,18 +151,47 @@ class ConsumerWithStrategy:
             return
         
         logger.info(f"\n{'='*80}")
-        logger.info(f"UNDERCUT WINDOW CHECK - Lap {self.lap_count}")
+        logger.info(f"UNDERCUT WINDOW CHECK - Race Lap {self.current_race_lap}")
+        logger.info(f"Total Messages Processed: {self.message_count}")
         logger.info(f"Drivers (sorted by position): {sorted_drivers}")
         logger.info(f"{'='*80}\n")
+        
+        comparisons_made = 0
+        lapped_cars_skipped = 0
         
         for i in range(len(sorted_drivers) - 1):
             ahead = sorted_drivers[i]
             behind = sorted_drivers[i + 1]
             
+            # Get lap numbers for both drivers
+            ahead_state = self.engine.driver_state.get(ahead)
+            behind_state = self.engine.driver_state.get(behind)
+            
+            if not ahead_state or not behind_state:
+                continue
+            
+            ahead_lap = ahead_state.get('lap_number', 0)
+            behind_lap = behind_state.get('lap_number', 0)
+            
+            # LAPPED CAR HANDLING: Only compare if on same lap or within 1 lap
+            lap_difference = abs(ahead_lap - behind_lap)
+            
+            if lap_difference > 1:
+                logger.debug(f"Skipping {ahead} (Lap {ahead_lap}) vs {behind} (Lap {behind_lap}) - "
+                           f"lap difference too large ({lap_difference} laps)")
+                lapped_cars_skipped += 1
+                continue
+            
+            # If exactly 1 lap apart, note it but still analyze
+            if lap_difference == 1:
+                logger.info(f"⚠️  Analyzing {ahead} vs {behind} despite 1 lap difference")
+            
             result = self.engine.predict_undercut_window(ahead, behind)
             
             if result is None:
                 continue
+            
+            comparisons_made += 1
             
             # Cache and log the prediction
             self.cache_prediction(ahead, behind, result)
@@ -157,6 +199,11 @@ class ConsumerWithStrategy:
             
             if result['viable']:
                 self.print_alert(ahead, behind, result)
+        
+        logger.info(f"\nUndercut Analysis Summary:")
+        logger.info(f"  - Comparisons made: {comparisons_made}")
+        logger.info(f"  - Lapped cars skipped: {lapped_cars_skipped}")
+
                 
     # Log prediction results to file and Redis
     def log_prediction(self, ahead: str, behind: str, result: dict):
@@ -180,28 +227,35 @@ class ConsumerWithStrategy:
         
     # Print formatted undercut opportunity alert
     def print_alert(self, ahead: str, behind: str, result: dict):
+        # alert = f"""
+        # ╔══════════════════════════════════════════════════════════════╗
+        # ║                     UNDERCUT OPPORTUNITY!                   ║ 
+        # ╠══════════════════════════════════════════════════════════════╣
+        # ║ Driver Ahead : {ahead:4}                                      ║
+        # ║ Driver Behind: {behind:4}                                      ║
+        # ╠══════════════════════════════════════════════════════════════╣
+        # ║ Viable Undercut : YES                                       ║
+        # ║ Time Delta/Lap  : {result['time_delta']} seconds            ║
+        # ║ Current Gap     : {result.get('current_gap', 'N/A')} seconds ║
+        # ║ Laps to Overcome: {result.get('laps_to_overcome', 'N/A')} laps ║
+        # ║ Confidence      : {result['confidence']} %                  ║
+        # ║ Pit Stop Loss   : {result['pit_loss']} seconds             ║
+        # ║ Recommendation  : {result['recommendation']}                 ║
+        # ╚══════════════════════════════════════════════════════════════╝
+        #         """
         alert = f"""
-                ╔════════════════════════════════════════════════════════════════╗
-                ║                    🏁 UNDERCUT DETECTED! 🏁                    ║
-                ╠════════════════════════════════════════════════════════════════╣
-                ║ Driver AHEAD (to undercut):   {ahead:40} ║
-                ║ Driver BEHIND (pitting):      {behind:40} ║
-                ║ Recommendation:               {result['recommendation']:40} ║
-                ╠════════════════════════════════════════════════════════════════╣
-                ║ Time Delta:                   {result['time_delta']:6}s gain              ║
-                ║ Confidence:                   {result['confidence'] * 100:5.0f}%                  ║
-                ║ Pit Loss:                     {result['pit_loss']:6.1f}s                   ║
-                ║                                                                ║
-                ║ {ahead}'s Projected Pace:     {result['ahead_projected']:6.2f}s (tire age: {result['ahead_tire_age']}) ║
-                ║ {behind}'s Projected Pace:    {result['behind_projected']:6.2f}s (after pit)      ║
-                ║                                                                ║
-                ║ Tire Info:                                                     ║
-                ║   {ahead} ({result['ahead_compound']:6}):  {result['ahead_degradation']:.4f}s/lap degradation        ║
-                ║   {behind} ({result['behind_compound']:6}):  compound advantage: {result['compound_advantage']:+.2f}s ║
-                ║                                                                ║
-                ║ Conditions: {result['weather_condition']:20} | Status: {result['track_status']:10} ║
-                ║ Reason: {result['reason']:50} ║
-                ╚════════════════════════════════════════════════════════════════╝
+        {'='*80}
+                            *** UNDERCUT DETECTED! ***
+        {'='*80}
+        Driver AHEAD (to undercut):   {ahead}
+        Driver BEHIND (pitting):      {behind}
+        Recommendation:               {result['recommendation']}
+        {'='*80}
+        Current Gap:                  {result['current_gap']:.2f}s
+        Time Delta (per lap):         {result['time_delta']:.2f}s gain
+        Laps to Overcome Deficit:     {result['laps_to_overcome']}
+        Confidence:                   {result['confidence'] * 100:.0f}%
+        Pit Loss:                     {result['pit_loss']:.1f}s
                 """
         logger.info(alert)
         print(alert)
@@ -236,22 +290,29 @@ class ConsumerWithStrategy:
                 }
                 
                 self.engine.update_driver_state(driver, lap_data)
-                self.lap_count += 1
+                self.message_count += 1
+                
+                # Update current race lap
+                lap_num = data.get("LapNumber", 0)
+                if lap_num and lap_num > self.current_race_lap:
+                    self.current_race_lap = lap_num
                 
                 # Cache driver state in Redis
                 self.cache_driver_state(driver)
                 
                 # Print lap details
-                lap_num = data.get("LapNumber", "N/A")
                 compound = data.get("Compound", "N/A")
                 tyre_life = data.get("TyreLife", "N/A")
                 position = data.get("Position", "N/A")
                 
-                print(f"[LAP {self.lap_count}] {driver:4} | Lap {lap_num:3} | {compound:6} | TyreLife {tyre_life:2} | Pos {position}")
+                print(f"[MSG {self.message_count:4}] Lap {lap_num:3} | {driver:4} | {compound:6} | Tire {tyre_life:2} | P{position}")
 
-                # Check for undercut at N laps
-                if self.lap_count % self.check_interval == 0:
+                # Check for undercut every N laps (not every N messages!)
+                if (self.current_race_lap > 0 and 
+                    self.current_race_lap % self.check_interval == 0 and
+                    self.current_race_lap != self.last_checked_lap):
                     self.check_undercut_opportunities()
+                    self.last_checked_lap = self.current_race_lap
                     
         except KeyboardInterrupt:
             logger.info("Consumer interrupted by user")
@@ -270,11 +331,19 @@ class ConsumerWithStrategy:
             
     # Print a summary of driver states
     def print_summary(self):
+        logger.info("\n" + "="*80)
+        logger.info("CONSUMER SUMMARY")
+        logger.info("="*80)
+        logger.info(f"Total Messages Processed: {self.message_count}")
+        logger.info(f"Total Race Laps Covered: {self.current_race_lap}")
+        logger.info(f"Unique Drivers Tracked: {len(self.engine.get_all_drivers())}")
+        logger.info(f"Drivers: {', '.join(sorted(self.engine.get_all_drivers()))}")
+        
         if self.redis_client:
             try: 
                 predictions_count = self.redis_client.zcard("f1:predictions:recent")
-                logger.info(f"\nRedis cached predictions: {predictions_count}")
-                logger.info(f"Race session stored: {self.redis_client.get('f1:race:session')}")
+                logger.info(f"Redis Cached Predictions: {predictions_count}")
+                logger.info(f"Race Session: {self.redis_client.get('f1:race:session')}")
             except Exception as e:
                 logger.error(f"Failed to retrieve summary from Redis: {e}")
             

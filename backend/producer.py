@@ -23,7 +23,13 @@ class RaceSimulator:
         print(f"Loading session: {year} {event} {session_type}")
         self.session = fastf1.get_session(year, event, session_type)
         self.session.load()
-        self.laps = self.session.laps.reset_index(drop=False)
+        
+        # Sort laps by LapNumber first, then by driver (for consistent ordering)
+        self.laps = self.session.laps.sort_values(['LapNumber', 'Driver']).reset_index(drop=True)
+        
+        print(f"Loaded {len(self.laps)} total laps")
+        print(f"Unique drivers: {self.laps['Driver'].nunique()}")
+        print(f"Lap range: {self.laps['LapNumber'].min()} - {self.laps['LapNumber'].max()}")
 
     # Convert timedelta to total seconds.    
     def timedelta_to_seconds(self, td):
@@ -131,17 +137,24 @@ class RaceSimulator:
                     break
                 
                 if sent % 100 == 0: 
+                    current_lap = payload['LapNumber']
                     target = max_laps if max_laps else total_laps
                     progress = (sent / target) * 100
-                    print(f"Progress: {sent} laps sent ({progress:.1f}%)")
+                    print(f"Progress: {sent} messages sent ({progress:.1f}%) - Currently streaming Lap {current_lap}")
                 time.sleep(self.delay)
         except KeyboardInterrupt:
             print("Ctrl+C -> Interrupted by user.")
         finally:
-            print(f"\n Summary:")
-            print(f"   Total Laps Sent: {sent}")
-            print(f"   Unique drivers: {len(unique_drivers)}")  # ← Add this
-            print(f"   Drivers: {sorted(unique_drivers)}")
+            print(f"\n═══════════════════════════════════════")
+            print(f"   RACE SIMULATION SUMMARY")
+            print(f"═══════════════════════════════════════")
+            print(f"   Total Messages Sent: {sent}")
+            print(f"   Unique Drivers: {len(unique_drivers)}")
+            print(f"   Drivers: {', '.join(sorted(unique_drivers))}")
+            if sent > 0:
+                approx_laps = sent // len(unique_drivers) if unique_drivers else 0
+                print(f"   Approximate Laps Simulated: {approx_laps}")
+            print(f"═══════════════════════════════════════")
             print("Flushing producer...")
             self.producer.flush()
             self.producer.close()
@@ -150,4 +163,4 @@ class RaceSimulator:
         
 if __name__ == "__main__":
     sim = RaceSimulator(delay=0.1)
-    sim.stream_race(max_laps=500)
+    sim.stream_race()
