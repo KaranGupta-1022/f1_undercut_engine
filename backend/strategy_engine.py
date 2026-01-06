@@ -1,14 +1,165 @@
 from datetime import timedelta
 from typing import Dict, Optional, List
 
-class UndercutEngine:
-    # Tire degradation rates for each compound (seconds per lap)
-    DEGRADATION_RATES = {
-        "SOFT": 0.08,
-        "MEDIUM": 0.05,
-        "HARD": 0.03
-    }
+# Track-specific configurations
+# Note: Keys must match the first word of EventName from FastF1
+TRACK_CONFIG = {
+    # Europe
+    "Monaco Grand Prix": {
+        "pit_loss": 22.0,
+        "amortization_laps": 3,
+        "fresh_tire_advantage": 1.0,
+        "degradation_rates": {"SOFT": 0.05, "MEDIUM": 0.03, "HARD": 0.02}
+    },
+    "Belgian Grand Prix": {
+        "pit_loss": 17.0,
+        "amortization_laps": 5,
+        "fresh_tire_advantage": 2.5,
+        "degradation_rates": {"SOFT": 0.14, "MEDIUM": 0.09, "HARD": 0.05}
+    },
+    "British Grand Prix": {
+        "pit_loss": 20.0,
+        "amortization_laps": 4,
+        "fresh_tire_advantage": 2.0,
+        "degradation_rates": {"SOFT": 0.10, "MEDIUM": 0.06, "HARD": 0.035}
+    },
+    "Spanish Grand Prix": {
+        "pit_loss": 19.0,
+        "amortization_laps": 4,
+        "fresh_tire_advantage": 2.2,
+        "degradation_rates": {"SOFT": 0.12, "MEDIUM": 0.08, "HARD": 0.04}
+    },
+    "Austrian Grand Prix": {
+        "pit_loss": 18.0,
+        "amortization_laps": 5,
+        "fresh_tire_advantage": 2.8,
+        "degradation_rates": {"SOFT": 0.16, "MEDIUM": 0.10, "HARD": 0.06}
+    },
+    "Hungarian Grand Prix": {
+        "pit_loss": 21.0,
+        "amortization_laps": 3,
+        "fresh_tire_advantage": 1.5,
+        "degradation_rates": {"SOFT": 0.08, "MEDIUM": 0.05, "HARD": 0.03}
+    },
+    "Dutch Grand Prix": {
+        "pit_loss": 16.0,
+        "amortization_laps": 5,
+        "fresh_tire_advantage": 3.0,
+        "degradation_rates": {"SOFT": 0.18, "MEDIUM": 0.12, "HARD": 0.07}
+    },
+    "Italian Grand Prix": {
+        "pit_loss": 15.0,
+        "amortization_laps": 6,
+        "fresh_tire_advantage": 3.2,
+        "degradation_rates": {"SOFT": 0.20, "MEDIUM": 0.14, "HARD": 0.08}
+    },
+    "Singapore Grand Prix": {
+        "pit_loss": 24.0,
+        "amortization_laps": 2,
+        "fresh_tire_advantage": 0.8,
+        "degradation_rates": {"SOFT": 0.04, "MEDIUM": 0.02, "HARD": 0.01}
+    },
     
+    # Asia
+    "Japanese Grand Prix": {
+        "pit_loss": 18.0,
+        "amortization_laps": 5,
+        "fresh_tire_advantage": 2.6,
+        "degradation_rates": {"SOFT": 0.15, "MEDIUM": 0.10, "HARD": 0.05}
+    },
+    "Chinese Grand Prix": {
+        "pit_loss": 17.0,
+        "amortization_laps": 5,
+        "fresh_tire_advantage": 2.6,
+        "degradation_rates": {"SOFT": 0.15, "MEDIUM": 0.10, "HARD": 0.05}
+    },
+    "Qatar Grand Prix": {
+        "pit_loss": 17.0,
+        "amortization_laps": 5,
+        "fresh_tire_advantage": 2.7,
+        "degradation_rates": {"SOFT": 0.16, "MEDIUM": 0.11, "HARD": 0.06}
+    },
+    "Azerbaijan Grand Prix": {
+        "pit_loss": 18.0,
+        "amortization_laps": 5,
+        "fresh_tire_advantage": 2.5,
+        "degradation_rates": {"SOFT": 0.14, "MEDIUM": 0.09, "HARD": 0.05}
+    },
+    
+    # Americas
+    "Australian Grand Prix": {
+        "pit_loss": 19.0,
+        "amortization_laps": 4,
+        "fresh_tire_advantage": 2.1,
+        "degradation_rates": {"SOFT": 0.11, "MEDIUM": 0.07, "HARD": 0.04}
+    },
+    "Miami Grand Prix": {
+        "pit_loss": 19.0,
+        "amortization_laps": 4,
+        "fresh_tire_advantage": 2.0,
+        "degradation_rates": {"SOFT": 0.10, "MEDIUM": 0.07, "HARD": 0.04}
+    },
+    "Canadian Grand Prix": {
+        "pit_loss": 21.0,
+        "amortization_laps": 3,
+        "fresh_tire_advantage": 1.6,
+        "degradation_rates": {"SOFT": 0.07, "MEDIUM": 0.04, "HARD": 0.025}
+    },
+    "Mexico City Grand Prix": {
+        "pit_loss": 20.0,
+        "amortization_laps": 4,
+        "fresh_tire_advantage": 2.1,
+        "degradation_rates": {"SOFT": 0.11, "MEDIUM": 0.07, "HARD": 0.04}
+    },
+    "United States Grand Prix": {
+        "pit_loss": 19.0,
+        "amortization_laps": 4,
+        "fresh_tire_advantage": 2.2,
+        "degradation_rates": {"SOFT": 0.12, "MEDIUM": 0.08, "HARD": 0.04}
+    },
+    "São Paulo Grand Prix": {
+        "pit_loss": 20.0,
+        "amortization_laps": 3,
+        "fresh_tire_advantage": 1.8,
+        "degradation_rates": {"SOFT": 0.09, "MEDIUM": 0.06, "HARD": 0.035}
+    },
+    
+    # Middle East
+    "Saudi Arabian Grand Prix": {
+        "pit_loss": 16.0,
+        "amortization_laps": 5,
+        "fresh_tire_advantage": 2.9,
+        "degradation_rates": {"SOFT": 0.17, "MEDIUM": 0.11, "HARD": 0.06}
+    },
+    
+    # Additional circuits
+    "Emilia Romagna Grand Prix": {
+        "pit_loss": 17.0,
+        "amortization_laps": 5,
+        "fresh_tire_advantage": 2.4,
+        "degradation_rates": {"SOFT": 0.13, "MEDIUM": 0.09, "HARD": 0.05}
+    },
+    "Bahrain Grand Prix": {
+        "pit_loss": 18.0,
+        "amortization_laps": 4,
+        "fresh_tire_advantage": 2.4,
+        "degradation_rates": {"SOFT": 0.13, "MEDIUM": 0.09, "HARD": 0.05}
+    },
+    "Las Vegas Grand Prix": {
+        "pit_loss": 17.0,
+        "amortization_laps": 5,
+        "fresh_tire_advantage": 2.5,
+        "degradation_rates": {"SOFT": 0.14, "MEDIUM": 0.09, "HARD": 0.05}
+    },
+    "Abu Dhabi Grand Prix": {
+        "pit_loss": 18.0,
+        "amortization_laps": 4,
+        "fresh_tire_advantage": 2.4,
+        "degradation_rates": {"SOFT": 0.13, "MEDIUM": 0.09, "HARD": 0.05}
+    },
+}
+
+class UndercutEngine:
     # Tire compound pace advantage (seconds per lap)
     # How much faster one compound is vs another
     COMPOUND_ADVANTAGE = {
@@ -20,11 +171,6 @@ class UndercutEngine:
         ("HARD", "MEDIUM"): -0.3,  # HARD is 0.3s/lap slower than MEDIUM
     }
     
-    # Pit stop times (in seconds) 
-    PIT_LOSS = 20.0 
-    SAFETY_CAR_PIT_LOSS = 10.0 
-    FRESH_TIRE_ADVANTAGE = 1.5 # seconds gained per lap on fresh tires
-    AMORTIZATION_LAPS = 3  # Laps over which fresh tire advantage is amortized 
     SAFETY_CAR_THRESHOLD = 5.0 # seconds gap threshold to consider pitting under safety car    
     
     # Weather impact on tire degradation
@@ -44,13 +190,13 @@ class UndercutEngine:
         "6": "VSC Deployed"
     }
     
-    def __init__(self):
+    def __init__(self, track=None):
         # driver_state[driver_name] = {
         #   "lap_number": int,
         #   "tyre_age": int,
         #   "compound": str,
         #   "position": int,
-        #   "lap_times": [float, ...],
+        #   "lap_times": [__init__, ...],
         #   "current_pace": float,
         #   "weather": {...},  # current weather conditions
         #   "track_status": str,  # current track status
@@ -60,6 +206,39 @@ class UndercutEngine:
         self.driver_state = {}
         self.weather = {}
         self.track_status = "GREEN"
+        self.track_name = None
+        
+         # Default constants (overridden by set_track)
+        self.PIT_LOSS = 20.0
+        self.AMORTIZATION_LAPS = 3
+        self.FRESH_TIRE_ADVANTAGE = 1.5
+        self.DEGRADATION_RATES = {"SOFT": 0.08, "MEDIUM": 0.05, "HARD": 0.03}
+        self.SAFETY_CAR_PIT_LOSS = 10.0
+    
+        if track:
+            self.set_track(track)
+      
+    # Load track-specific configuration and update instance constants     
+    def set_track(self, track_name: str):
+        if track_name in TRACK_CONFIG:
+            config = TRACK_CONFIG[track_name]
+            self.PIT_LOSS = config.get("pit_loss", 20.0)
+            self.AMORTIZATION_LAPS = config.get("amortization_laps", 3)
+            self.FRESH_TIRE_ADVANTAGE = config.get("fresh_tire_advantage", 1.5)
+            self.DEGRADATION_RATES = config.get("degradation_rates", {"SOFT": 0.08, "MEDIUM": 0.05, "HARD": 0.03})
+            self.track_name = track_name
+        else:
+            self.track_name = track_name
+            
+    # Return current track configuration.
+    def get_track_config(self) -> dict:
+        return {
+            "track_name": self.track_name,
+            "pit_loss": self.PIT_LOSS,
+            "amortization_laps": self.AMORTIZATION_LAPS,
+            "fresh_tire_advantage": self.FRESH_TIRE_ADVANTAGE,
+            "degradation_rates": self.DEGRADATION_RATES
+        }
 
     # Convert timedelta or string to seconds 
     def lap_time_to_seconds(self, lap_time)-> Optional[float]:
@@ -280,7 +459,7 @@ class UndercutEngine:
             "current_gap": 0.0,
             "laps_to_overcome": "N/A",
             "confidence": 0.0,
-            "pit_loss": self.PIT_LOSS,
+            "pit_loss": self.SAFETY_CAR_PIT_LOSS if self.is_safety_car_active() else self.PIT_LOSS,
             "ahead_projected": 0.0,
             "behind_projected": 0.0,
             "ahead_degradation": 0.0,

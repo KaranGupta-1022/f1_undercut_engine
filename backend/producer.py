@@ -13,7 +13,7 @@ cache_dir.mkdir(parents=True, exist_ok=True)
 fastf1.Cache.enable_cache(str(cache_dir))
 
 class RaceSimulator:
-    def __init__(self, year=2024, event="Monaco", session_type="R", bootstrap_servers="localhost:9092", delay=1.0):
+    def __init__(self, year=2024, event="Belgium", session_type="R", bootstrap_servers="localhost:9092", delay=1.0):
         self.delay = delay
         self.producer = KafkaProducer(
             bootstrap_servers=bootstrap_servers,

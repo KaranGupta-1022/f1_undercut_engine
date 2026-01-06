@@ -46,11 +46,19 @@ class ConsumerWithStrategy:
         self.log_file = log_file
         self.race_session = None
         self.last_checked_lap = 0  # Track when we last checked for undercuts
-
+        self.lap_count = 0
+        self.session_loaded = False
         
         logger.info("=== F1 Undercut Strategy Engine Started ===")
         logger.info(f"Consumer connected to Kafka")
         logger.info(f"Predictions will be logged to {self.log_file}")
+      
+    # Extract track name from session name (e.g., "Monaco Grand Prix" -> "Monaco")  
+    def handle_session_info(self, session_name: str):
+        if session_name:
+            self.engine.set_track(session_name)
+            logger.info(f"Engine configured for track: {session_name}")
+            logger.info(f"Track config: {self.engine.get_track_config()}")
         
     # Store the current race session in Redis
     def set_race_session(self, session_name):
@@ -266,6 +274,17 @@ class ConsumerWithStrategy:
         try:
             for message in self.consumer:
                 data = message.value
+                
+                # Load session config on first message
+                if not self.session_loaded:
+                    session_info = data.get('SessionName', {})
+                    if isinstance(session_info, dict):
+                        event_name = session_info.get('EventName')
+                    else:
+                        event_name = str(session_info)
+                    if event_name:
+                        self.handle_session_info(event_name)
+                    self.session_loaded = True
 
                 # Get the driver and update the engine
                 driver = data.get("Driver")
