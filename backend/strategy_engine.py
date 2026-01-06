@@ -4,9 +4,9 @@ from typing import Dict, Optional, List
 class UndercutEngine:
     # Tire degradation rates for each compound (seconds per lap)
     DEGRADATION_RATES = {
-        "SOFT": 1.5,
-        "MEDIUM": 1.0,
-        "HARD": 0.7
+        "SOFT": 0.08,
+        "MEDIUM": 0.05,
+        "HARD": 0.03
     }
     
     # Tire compound pace advantage (seconds per lap)
@@ -272,6 +272,28 @@ class UndercutEngine:
         
         return projected_pace / future_laps
     
+    # Create a standardized error response with all required fields.
+    def _create_error_response(self, reason: str, ahead=None, behind=None) -> dict:
+        return {
+            "viable": False,
+            "time_delta": 0.0,
+            "current_gap": 0.0,
+            "laps_to_overcome": "N/A",
+            "confidence": 0.0,
+            "pit_loss": self.PIT_LOSS,
+            "ahead_projected": 0.0,
+            "behind_projected": 0.0,
+            "ahead_degradation": 0.0,
+            "ahead_tire_age": 0,
+            "ahead_compound": "UNKNOWN",
+            "behind_compound": "UNKNOWN",
+            "compound_advantage": 0.0,
+            "weather_condition": "dry",
+            "track_status": self.track_status,
+            "recommendation": "STAY OUT",
+            "reason": reason
+        }
+    
     # Predict if an undercut is possible
     # Consider normal racing conditions,safety car, and the weather
     # returns dict with undercut recommendation and details
@@ -293,13 +315,9 @@ class UndercutEngine:
         
         if ahead_pos is not None and behind_pos is not None:
             if ahead_pos >= behind_pos:
-                return {
-                    "viable": False,
-                    "time_delta": 0.0,
-                    "confidence": 0.0,
-                    "pit_loss": 0.0,
-                    "reason": f"Position error: {driver_ahead} (P{ahead_pos}) is not ahead of {driver_behind} (P{behind_pos})"
-                }
+                return self._create_error_response(
+                    f"Position error: {driver_ahead} (P{ahead_pos}) is not ahead of {driver_behind} (P{behind_pos})"
+                )
                 
          # LAP NUMBER VALIDATION: Warn if drivers are on different laps (lapped cars)
         ahead_lap = ahead.get("lap_number", 0)
@@ -307,23 +325,21 @@ class UndercutEngine:
         lap_difference = abs(ahead_lap - behind_lap)
         
         if lap_difference > 1:
-            return {
-                "viable": False,
-                "time_delta": 0.0,
-                "confidence": 0.0,
-                "pit_loss": 0.0,
-                "reason": f"Lap difference too large: {driver_ahead} on Lap {ahead_lap}, {driver_behind} on Lap {behind_lap} ({lap_difference} laps apart)"
-            }
+            return self._create_error_response(
+                f"Lap difference too large: {driver_ahead} on Lap {ahead_lap}, {driver_behind} on Lap {behind_lap} ({lap_difference} laps apart)"
+            )
         
         # Checking that we have necessary info 
+        # Need at least 5 laps for stable predictions
         if not ahead["lap_times"] or not behind["lap_times"]:
-            return {
-                "viable": False,
-                "time_delta": 0.0,
-                "confidence": 0.0,
-                "pit_loss": 0.0,
-                "reason": "Insufficient lap time data"
-            }
+            return self._create_error_response("Insufficient lap time data")
+        
+        # Require minimum lap data for stable predictions
+        if len(ahead["lap_times"]) < 5 or len(behind["lap_times"]) < 5:
+            return self._create_error_response(
+                f"Not enough laps completed (need 5+, have {len(ahead['lap_times'])}/{len(behind['lap_times'])})"
+            )
+
             
         # Calculating the pit loss from track conditions
         pit_loss = self.SAFETY_CAR_PIT_LOSS if self.is_safety_car_active() else self.PIT_LOSS
@@ -339,8 +355,12 @@ class UndercutEngine:
         ahead_degradation *= ahead_weather_mult
         behind_degradation *= behind_weather_mult
         
+        # Degradation should be reasonable (0.1 - 3.0 seconds per lap)
+        ahead_degradation = max(0.1, min(ahead_degradation, 3.0))
+        behind_degradation = max(0.1, min(behind_degradation, 3.0))
+        
         # Project ahead's next lap (with degradation)
-        ahead_projected = ahead["current_pace"] + (ahead["tyre_age"] * ahead_degradation)
+        ahead_projected = ahead["current_pace"] + ahead_degradation
         
         # Project behind's lap after pit stop
         behind_best = min(behind["lap_times"][-5:])
@@ -401,7 +421,13 @@ class UndercutEngine:
                 reason = f"Gap too small ({current_gap:.1f}s) - risk of traffic after pit stop."
                 viable = False
             
-        confidence = min(len(behind["lap_times"]) / 5.0, 1.0)
+        confidence = min(len(behind["lap_times"]) / 10.0, 1.0)
+        
+        # Reject low confidence predictions
+        if confidence < 0.7:
+            return self._create_error_response(
+                f"Confidence too low ({confidence:.0%}) - need more lap data"
+            )
         
         # Reasoning
         reason = ""
@@ -413,6 +439,17 @@ class UndercutEngine:
             reason = "High track temperature."
         else:
             reason = "Normal racing conditions."
+            
+        # Reject unrealistic predictions
+        if ahead_projected > 200 or behind_projected > 200:
+            return self._create_error_response(
+                f"Calculation error: Unrealistic lap times (ahead: {ahead_projected:.1f}s, behind: {behind_projected:.1f}s)"
+            )
+        
+        if abs(time_delta_per_lap) > 100:
+            return self._create_error_response(
+                f"Calculation error: Unrealistic time delta ({time_delta_per_lap:.1f}s/lap)"
+            )
             
         return {
             "viable": viable,
@@ -434,25 +471,6 @@ class UndercutEngine:
             "reason": reason
         }
         
-    # Recommendation during safety car period.
-    # Pit if gap to leader is within threshold 
-    def get_safety_car_recommendation(self, driver_behind: str, gap_to_leader: float) -> Optional[dict]:
-        if driver_behind not in self.driver_state:
-            return None
-        
-        behind = self.driver_state[driver_behind]
-        
-        # During safety car, pit if gap to leader is within threshold
-        if self.is_safety_car_active() and gap_to_leader <= self.SAFETY_CAR_THRESHOLD:
-            return {
-                "viable": True,
-                "recommendation": "BOX NOW (Safety Car window)",
-                "reason": f"Safety car gap threshold ({gap_to_leader:.2f}s < {self.SAFETY_CAR_THRESHOLD}s)",
-                "pit_loss": self.SAFETY_CAR_PIT_LOSS
-            }
-            
-        return None
-    
     # Return a list of all drivers
     def get_all_drivers(self)-> List[str]:
         return list(self.driver_state.keys())
