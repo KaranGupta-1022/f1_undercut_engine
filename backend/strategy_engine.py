@@ -204,6 +204,7 @@ class UndercutEngine:
         #   "gap_to_leader": float
         # }
         self.driver_state = {}
+        self.inactive_count = {}  # Track laps since last data received for each driver
         self.weather = {}
         self.track_status = "GREEN"
         self.track_name = None
@@ -381,8 +382,19 @@ class UndercutEngine:
         state["compound"] = compound if compound else state["compound"]
         decoded = self.TRACK_STATUS_CODES.get(str(track_status), "GREEN") if track_status is not None else state["track_status"]
         state["track_status"] = decoded
+        
+        # Detect pit stop: Stint increments = pit occurred
+        previous_stint = state.get("stint", 1)
+        if stint and stint != previous_stint:
+            state["lap_times"] = []  # Clear old lap times after pit
+            state["current_pace"] = 0.0
+        
+        # Update stint after pit stop check
         state["stint"] = stint if stint else state["stint"]
         
+        # Reset inactivity counter when data is received for this driver
+        self.inactive_count[driver] = 0
+                
         # Parse and store weather data
         if weather:
             state["weather"] = self.parse_weather_data(weather)
@@ -443,13 +455,13 @@ class UndercutEngine:
         
         # Projected pace calculation
         tire_age = state["tyre_age"]
-        projected_pace = current_pace
+        total_pace = 0
         for lap in range(future_laps):
             tire_wear = tire_age + lap
             degradation_penalty = adjusted_degradation * tire_wear
-            projected_pace += degradation_penalty
-        
-        return projected_pace / future_laps
+            total_pace += (current_pace + degradation_penalty)  # each lap has full pace + degradation
+        return total_pace / future_laps
+
     
     # Create a standardized error response with all required fields.
     def _create_error_response(self, reason: str, ahead=None, behind=None) -> dict:
@@ -483,17 +495,21 @@ class UndercutEngine:
     # pit_loss (float): estimated pit stop loss time
     def predict_undercut_window(self, driver_ahead: str, driver_behind: str) -> Optional[dict]:
         if driver_ahead not in self.driver_state or driver_behind not in self.driver_state: 
-            return None
+            return self._create_error_response("Driver state not found")
             
         ahead = self.driver_state[driver_ahead]
         behind = self.driver_state[driver_behind]
+        
+        # RETIREMENT CHECK: Skip if either driver is retired
+        if ahead.get("retired", False) or behind.get("retired", False):
+            return self._create_error_response("One or both drivers retired")
         
         # POSITION VALIDATION: Ensure ahead is actually ahead
         ahead_pos = ahead.get("position")
         behind_pos = behind.get("position")
         
         if ahead_pos is not None and behind_pos is not None:
-            if ahead_pos >= behind_pos:
+            if ahead_pos > behind_pos:
                 return self._create_error_response(
                     f"Position error: {driver_ahead} (P{ahead_pos}) is not ahead of {driver_behind} (P{behind_pos})"
                 )
@@ -537,9 +553,9 @@ class UndercutEngine:
         # Degradation should be reasonable (0.1 - 3.0 seconds per lap)
         ahead_degradation = max(0.1, min(ahead_degradation, 3.0))
         behind_degradation = max(0.1, min(behind_degradation, 3.0))
-        
+
         # Project ahead's next lap (with degradation)
-        ahead_projected = ahead["current_pace"] + ahead_degradation
+        ahead_projected = ahead["current_pace"] + (ahead_degradation * ahead["tyre_age"])
         
         # Project behind's lap after pit stop
         behind_best = min(behind["lap_times"][-5:])
@@ -658,8 +674,22 @@ class UndercutEngine:
     def get_driver_state(self, driver: str) -> Optional[dict]:
         return self.driver_state.get(driver, None)
     
+    # Mark drivers as retired after 1 missed lap (immediate detection on DNF).
+    def mark_inactive_drivers_retired(self, active_drivers_this_lap: set):
+        for driver in list(self.driver_state.keys()):
+            if driver not in active_drivers_this_lap:
+                # Increment inactivity counter for drivers with no data this lap
+                self.inactive_count[driver] = self.inactive_count.get(driver, 0) + 1
+                # Mark retired after 1 missed lap (immediate detection)
+                if self.inactive_count[driver] >= 1:
+                    self.driver_state[driver]["retired"] = True
+            else:
+                # Reset counter when driver sends data again
+                self.inactive_count[driver] = 0
+    
     # Clear all driver state
     def reset(self):
         self.driver_state.clear()
         self.weather.clear()
+        self.inactive_count.clear()
         self.track_status = "GREEN"

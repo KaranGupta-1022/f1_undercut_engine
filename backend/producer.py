@@ -13,8 +13,9 @@ cache_dir.mkdir(parents=True, exist_ok=True)
 fastf1.Cache.enable_cache(str(cache_dir))
 
 class RaceSimulator:
-    def __init__(self, year=2024, event="Belgium", session_type="R", bootstrap_servers="localhost:9092", delay=1.0):
+    def __init__(self, year=2024, event="Monaco", session_type="R", bootstrap_servers="localhost:9092", delay=1.0, max_laps=None):
         self.delay = delay
+        self.max_laps = max_laps
         self.producer = KafkaProducer(
             bootstrap_servers=bootstrap_servers,
             value_serializer=lambda v: json.dumps(v, default=str).encode("utf-8"),
@@ -106,7 +107,7 @@ class RaceSimulator:
             logger.error(f"Error getting track status: {e}")
             return "1"
         
-    def stream_race(self, topic="f1-telemetry", max_laps=None):
+    def stream_race(self, topic="f1-telemetry"):
         sent = 0
         unique_drivers = set()
         total_laps = len(self.laps)
@@ -126,19 +127,20 @@ class RaceSimulator:
                     "Weather": self.get_weather_dict(lap),
                     "TrackStatus": self.get_track_status_for_lap(lap)
                 }
+                
+                if self.max_laps and payload['LapNumber'] > self.max_laps:
+                    print(f"Reached max laps limit: {self.max_laps}. Stopping simulation.")
+                    break
+                
                 unique_drivers.add(payload['Driver'])
                 self.producer.send(topic, value=payload)
                 print("Sent payload:")
                 print(json.dumps(payload, indent=2, default=str))
                 sent += 1
                 
-                if max_laps and sent >= max_laps:
-                    print(f"Reached max laps limit: {max_laps}. Stopping simulation.")
-                    break
-                
                 if sent % 100 == 0: 
                     current_lap = payload['LapNumber']
-                    target = max_laps if max_laps else total_laps
+                    target = self.max_laps if self.max_laps else total_laps
                     progress = (sent / target) * 100
                     print(f"Progress: {sent} messages sent ({progress:.1f}%) - Currently streaming Lap {current_lap}")
                 time.sleep(self.delay)
@@ -153,7 +155,7 @@ class RaceSimulator:
             print(f"   Drivers: {', '.join(sorted(unique_drivers))}")
             if sent > 0:
                 approx_laps = sent // len(unique_drivers) if unique_drivers else 0
-                print(f"   Approximate Laps Simulated: {approx_laps}")
+                print(f"   Approximate Laps Simulated: {self.max_laps if self.max_laps else approx_laps}")
             print(f"═══════════════════════════════════════")
             print("Flushing producer...")
             self.producer.flush()

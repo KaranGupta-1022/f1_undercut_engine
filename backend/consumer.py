@@ -44,6 +44,7 @@ class ConsumerWithStrategy:
         self.current_race_lap = 0  # Current lap number in the race
         self.check_interval = 5  # Check every 5 laps
         self.log_file = log_file
+        self.track_set = False
         self.race_session = None
         self.last_checked_lap = 0  # Track when we last checked for undercuts
         self.lap_count = 0
@@ -217,6 +218,7 @@ class ConsumerWithStrategy:
     def log_prediction(self, ahead: str, behind: str, result: dict):
         log_entry = {
             "timestamp": datetime.now().isoformat(),
+            "lap_number": self.current_race_lap,
             "ahead": ahead,
             "behind": behind,
             "viable": result["viable"],
@@ -308,6 +310,15 @@ class ConsumerWithStrategy:
                     "TRACK_STATUS": data.get("TrackStatus", "1")
                 }
                 
+                # Set track from producer session info once
+                if not self.track_set:
+                    session = data.get("SessionName") or {}
+                    event_name = session.get("EventName")
+                    if event_name:
+                        self.engine.set_track(event_name)
+                        logger.info(f"Track config loaded for: {event_name}")
+                        self.track_set = True
+                
                 self.engine.update_driver_state(driver, lap_data)
                 self.message_count += 1
                 
@@ -319,6 +330,11 @@ class ConsumerWithStrategy:
                 # Cache driver state in Redis
                 self.cache_driver_state(driver)
                 
+                # Track which drivers sent data this lap
+                if not hasattr(self, 'current_lap_drivers'):
+                    self.current_lap_drivers = set()
+                self.current_lap_drivers.add(driver)
+                
                 # Print lap details
                 compound = data.get("Compound", "N/A")
                 tyre_life = data.get("TyreLife", "N/A")
@@ -326,7 +342,14 @@ class ConsumerWithStrategy:
                 
                 print(f"[MSG {self.message_count:4}] Lap {lap_num:3} | {driver:4} | {compound:6} | Tire {tyre_life:2} | P{position}")
 
-                # Check for undercut every N laps (not every N messages!)
+                # Mark retired drivers based on inactivity (check every lap)
+                if lap_num and lap_num > self.current_race_lap:
+                    # New lap detected - mark drivers who didn't send data
+                    self.engine.mark_inactive_drivers_retired(self.current_lap_drivers)
+                    self.current_lap_drivers = set()  # Reset for new lap
+                    self.current_race_lap = lap_num
+                
+                # Check for undercut every N laps
                 if (self.current_race_lap > 0 and 
                     self.current_race_lap % self.check_interval == 0 and
                     self.current_race_lap != self.last_checked_lap):
