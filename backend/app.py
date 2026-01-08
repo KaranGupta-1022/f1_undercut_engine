@@ -17,6 +17,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Setup predictions file logger
+predictions_logger = logging.getLogger('predictions')
+predictions_handler = logging.FileHandler('predictions.log', mode='a', encoding='utf-8')
+predictions_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
+predictions_logger.addHandler(predictions_handler)
+predictions_logger.setLevel(logging.INFO)
+
 # Initialize Flask app
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'f1-undercut-secret-key-2024'
@@ -193,6 +200,32 @@ def cache_prediction(ahead: str, behind: str, result: dict):
         logger.error(f"Failed to cache prediction: {e}")
 
 # Check for undercut opportunities and broadcast alerts
+def log_prediction(ahead: str, behind: str, result: dict):
+    """Log prediction results to file for audit trail."""
+    try:
+        log_entry = {
+            'timestamp': datetime.now().isoformat(),
+            'race_lap': current_race_lap,
+            'ahead': ahead,
+            'behind': behind,
+            'viable': result['viable'],
+            'time_delta': result['time_delta'],
+            'confidence': result['confidence'],
+            'recommendation': result['recommendation'],
+            'pit_loss': result['pit_loss'],
+            'current_gap': result.get('current_gap', 0.0),
+            'laps_to_overcome': result.get('laps_to_overcome', 'N/A'),
+            'ahead_projected': result['ahead_projected'],
+            'behind_projected': result['behind_projected'],
+            'ahead_tire_age': result['ahead_tire_age'],
+            'ahead_compound': result['ahead_compound'],
+            'track_status': result['track_status'],
+            'reason': result.get('reason', '')
+        }
+        predictions_logger.info(json.dumps(log_entry))
+    except Exception as e:
+        logger.error(f"Failed to log prediction: {e}")
+
 def check_and_broadcast_undercuts():
     sorted_drivers = get_sorted_drivers_by_position()
     alerts = []
@@ -231,6 +264,7 @@ def check_and_broadcast_undercuts():
             }
             alerts.append(alert)
             cache_prediction(ahead, behind, result)
+            log_prediction(ahead, behind, result)
             socketio.emit('undercut_alert', alert, broadcast=True)
             logger.info(f"UNDERCUT ALERT: {ahead} vs {behind} | Delta: {result['time_delta']}s")
     
