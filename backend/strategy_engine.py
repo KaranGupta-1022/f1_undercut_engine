@@ -500,10 +500,6 @@ class UndercutEngine:
         ahead = self.driver_state[driver_ahead]
         behind = self.driver_state[driver_behind]
         
-        # RETIREMENT CHECK: Skip if either driver is retired
-        if ahead.get("retired", False) or behind.get("retired", False):
-            return self._create_error_response("One or both drivers retired")
-        
         # POSITION VALIDATION: Ensure ahead is actually ahead
         ahead_pos = ahead.get("position")
         behind_pos = behind.get("position")
