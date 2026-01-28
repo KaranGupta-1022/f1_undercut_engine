@@ -686,6 +686,7 @@ class UndercutEngine:
     # Clear all driver state
     def reset(self):
         self.driver_state.clear()
-        self.weather.clear()
         self.inactive_count.clear()
+        self.weather.clear()
         self.track_status = "GREEN"
+        self.track_name = None

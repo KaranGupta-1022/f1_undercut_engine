@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>F1 Undercut WebSocket Tester</title>
+    <style>
+        body {
+            font-family: monospace;
+            background: #1a1a1a;
+            color: #00ff00;
+            padding: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1 { color: #ff6b00; }
+        .log { 
+            background: #0a0a0a; 
+            border: 1px solid #00ff00;
+            padding: 10px;
+            height: 400px;
+            overflow-y: auto;
+            margin: 20px 0;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        .alert { color: #ff0000; font-weight: bold; }
+        .success { color: #00ff00; }
+        .info { color: #00ccff; }
+        .warn { color: #ffaa00; }
+        button {
+            background: #ff6b00;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover { background: #ff8800; }
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+            margin: 20px 0;
+        }
+        .metric {
+            background: #0a0a0a;
+            border: 1px solid #00ff00;
+            padding: 15px;
+            border-radius: 5px;
+        }
+        .metric-label { color: #00ccff; font-size: 12px; }
+        .metric-value { color: #00ff00; font-size: 24px; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>🏁 F1 Undercut Engine - WebSocket Tester</h1>
+    
+    <div>
+        <button onclick="socket.emit('request_status')">📊 Get Status</button>
+        <button onclick="socket.emit('request_drivers')">👨‍🏫 Get Drivers</button>
+        <button onclick="clearLog()">🗑️ Clear Log</button>
+    </div>
+
+    <div class="metrics">
+        <div class="metric">
+            <div class="metric-label">Status</div>
+            <div class="metric-value" id="status">❌</div>
+        </div>
+        <div class="metric">
+            <div class="metric-label">Messages</div>
+            <div class="metric-value" id="messages">0</div>
+        </div>
+        <div class="metric">
+            <div class="metric-label">Current Lap</div>
+            <div class="metric-value" id="lap">0</div>
+        </div>
+        <div class="metric">
+            <div class="metric-label">Undercuts</div>
+            <div class="metric-value" id="undercuts">0</div>
+        </div>
+    </div>
+
+    <div class="log" id="log"></div>
+
+    <!-- Socket.IO Client -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    
+    <script>
+        const logElement = document.getElementById('log');
+        const socket = io('http://localhost:5000');
+
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const className = type; // 'info', 'success', 'alert', 'warn'
+            const line = document.createElement('div');
+            line.className = className;
+            line.textContent = `[${timestamp}] ${message}`;
+            logElement.appendChild(line);
+            logElement.scrollTop = logElement.scrollHeight;
+        }
+
+        function clearLog() {
+            logElement.innerHTML = '';
+        }
+
+        // ===== CONNECTION =====
+        socket.on('connect', () => {
+            document.getElementById('status').textContent = '✅ Connected';
+            log('✅ Connected to Flask backend', 'success');
+            log('Client ID: ' + socket.id, 'info');
+            socket.emit('request_status');
+            socket.emit('request_drivers');
+        });
+
+        socket.on('disconnect', () => {
+            document.getElementById('status').textContent = '❌ Disconnected';
+            log('❌ Disconnected from backend', 'alert');
+        });
+
+        // ===== TRACK INFO =====
+        socket.on('track_info', (data) => {
+            log(`🏁 Track: ${data.track}`, 'warn');
+        });
+
+        // ===== RACE UPDATES =====
+        let lapCount = 0;
+        socket.on('race_update', (data) => {
+            lapCount++;
+            document.getElementById('lap').textContent = data.lap_number;
+            if (lapCount % 5 === 0) {
+                log(`🏎️ [${data.lap_number}] ${data.driver}: ${data.lap_time}s | ${data.compound} | Pos ${data.position}`, 'info');
+            }
+        });
+
+        // ===== UNDERCUT ALERTS =====
+        socket.on('undercut_alert', (alert) => {
+            document.getElementById('undercuts').textContent = parseInt(document.getElementById('undercuts').textContent) + 1;
+            log(`🚨 UNDERCUT: ${alert.ahead} → ${alert.behind} | Δ${alert.time_delta}s | ${alert.recommendation}`, 'alert');
+        });
+
+        // ===== STATUS =====
+        socket.on('status_response', (data) => {
+            document.getElementById('messages').textContent = data.messages_processed;
+            document.getElementById('lap').textContent = data.current_lap;
+            log(`📊 Status: ${data.messages_processed} msgs | ${data.drivers_tracked} drivers | ${data.undercuts_detected} undercuts`, 'info');
+        });
+
+        // ===== DRIVERS =====
+        socket.on('drivers_response', (drivers) => {
+            log(`👨‍🏫 ${drivers.length} drivers: ${drivers.map(d => d.name).join(', ')}`, 'info');
+        });
+
+        // ===== CLIENT COUNT =====
+        socket.on('client_count', (data) => {
+            log(`👥 ${data.count} client(s) connected`, 'info');
+        });
+
+        // Auto-refresh every 10 seconds
+        setInterval(() => {
+            socket.emit('request_status');
+        }, 10000);
+
+        log('🔄 Initializing Socket.IO connection...', 'warn');
+    </script>
+</body>
+</html>

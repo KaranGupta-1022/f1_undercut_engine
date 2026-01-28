@@ -17,22 +17,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Setup predictions file logger
-predictions_logger = logging.getLogger('predictions')
-predictions_handler = logging.FileHandler('predictions.log', mode='a', encoding='utf-8')
-predictions_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
-predictions_logger.addHandler(predictions_handler)
-predictions_logger.setLevel(logging.INFO)
+# Add file handler to existing logger
+file_handler = logging.FileHandler('predictions.log', mode='w', encoding='utf-8')
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
+logger.addHandler(file_handler)
 
 # Initialize Flask app
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'f1-undercut-secret-key-2024'
 
 # Enable CORS for all routes
-CORS(app, origins=["http://localhost:3000", "http://localhost:5173"])
+CORS(app, origins=["http://localhost:3000", "http://localhost:5173", "http://localhost:8000"])
 
 # Intitialize SocketIO
-socketio = SocketIO(app, cors_allowed_origins=["http://localhost:3000", "http://localhost:5173"])
+socketio = SocketIO(app, cors_allowed_origins=["http://localhost:3000", "http://localhost:5173", "http://localhost:8000"])
 
 # Global Variables
 engine = UndercutEngine()
@@ -45,7 +43,6 @@ current_race_lap = 0
 last_race_update = None
 last_checked_lap = 0
 
-# Initialize Redis client (optional - graceful degradation if unavailable)
 try:
     redis_client = redis.Redis(
         host='localhost',
@@ -54,10 +51,71 @@ try:
         decode_responses=True
     )
     redis_client.ping()
-    logger.info("Connected to Redis")
+    logger.info('Connected to Redis at localhost:6379')
 except Exception as e:
-    logger.warning(f"Redis unavailable: {e}. Continuing without caching.")
+    logger.error(f'Failed to connect to Redis: {e}')
     redis_client = None
+
+# Cache the current race session in Redis
+def set_race_session(session_name):
+    if redis_client:
+        try:
+            redis_client.set("f1:race:session", session_name)
+            redis_client.expire("f1:race:session", 3600)  # 1 hour expiration
+            logger.info(f"Race session set in Redis: {session_name}")
+        except Exception as e:
+            logger.error(f"Failed to set race session in Redis: {e}")
+
+# Cache driver state in Redis
+def cache_driver_state(driver: str):
+    if not redis_client:
+        return
+    
+    try:
+        state = engine.driver_state.get(driver)
+        if state:
+            cache_state = {
+                "lap_number": str(state['lap_number']),
+                "tyre_age": str(state['tyre_age']),
+                "compound": state['compound'] or "UNKNOWN",
+                "position": str(state['position']) if state['position'] else "0",
+                "current_pace": str(state['current_pace']) if state['current_pace'] else "0",
+                "stint": str(state.get('stint')) if state.get('stint') else "0",
+                "last_lap_time": str(state["lap_times"][-1]) if state["lap_times"] else "0"
+            }
+            
+            redis_client.hset(f"f1:driver:{driver}", mapping=cache_state)
+            redis_client.expire(f"f1:driver:{driver}", 3600)
+    except Exception as e:
+        logger.error(f"Failed to cache driver state for {driver}: {e}")
+
+# Cache prediction results in Redis
+def cache_prediction(ahead: str, behind: str, result: dict):
+    if not redis_client:
+        return
+    
+    try:
+        cache_key = f"f1:prediction:{ahead}:{behind}:{current_race_lap}"
+        prediction_data = {
+            "timestamp": datetime.now().isoformat(),
+            "viable": str(result['viable']),
+            "time_delta": str(result['time_delta']),
+            "confidence": str(result['confidence']),
+            "recommendation": result['recommendation'],
+            "pit_loss": str(result['pit_loss']),
+            "track_status": result['track_status']
+        }
+        
+        redis_client.hset(cache_key, mapping=prediction_data)
+        redis_client.expire(cache_key, 3600)
+        
+        # Store in sorted set for quick retrieval
+        redis_client.zadd(
+            'f1:predictions:recent',
+            {f'{ahead}:{behind}': current_race_lap}
+        )
+    except Exception as e:
+        logger.error(f"Failed to cache prediction: {e}")
 
 # Background Kafka Listener 
 # Background thread that consumes Kafka messages and broadcasts via Websocket 
@@ -68,7 +126,7 @@ def kafka_listener():
         kafka_consumer = KafkaConsumer(
             'f1-telemetry',
             bootstrap_servers='localhost:9092',
-            auto_offset_reset='earliest',
+            auto_offset_reset='latest',
             enable_auto_commit=True,
             group_id='f1-flask-group',
             value_deserializer=lambda x: json.loads(x.decode('utf-8'))
@@ -95,26 +153,30 @@ def kafka_listener():
             if session_name and not engine.track_name:
                 engine.set_track(session_name)
                 logger.info(f"Track set to: {engine.track_name}")
-                # Persist race session to Redis
-                if redis_client:
-                    try:
-                        redis_client.set('f1:race:session', session_name)
-                        redis_client.expire('f1:race:session', 3600)  # 1 hour expiry
-                        logger.info(f"Race session persisted to Redis: {session_name}")
-                    except Exception as e:
-                        logger.error(f"Failed to persist race session: {e}")
                 socketio.emit('track_info', {
                     'track': session_name,
                     'config': engine.get_track_config()
-                }, broadcast=True)
+                })
                 
-            # Update engine with lap data
+            # Cache race session
+            set_race_session(session_name)
+                
+            # Updata engine with lap data
             engine.update_driver_state(driver, data)
-            cache_driver_state(driver)
             current_race_lap = lap_num if lap_num else current_race_lap
             
+            # Cache driver state in Redis
+            cache_driver_state(driver)
+            
+            # Mark retired drivers based on inactivity (check every lap)
+            if lap_num and lap_num > current_race_lap:
+                # New lap detected - mark drivers who didn't send data
+                if hasattr(kafka_listener, 'active_drivers_this_lap'):
+                    engine.mark_inactive_drivers_retired(kafka_listener.active_drivers_this_lap)
+                    kafka_listener.active_drivers_this_lap = set()
+                current_race_lap = lap_num
+            
             # Broadcast lap update to all clients
-            driver_state = engine.get_driver_state(driver)
             race_update = {
                 'timestamp': datetime.now().isoformat(),
                 'driver': driver,
@@ -123,23 +185,23 @@ def kafka_listener():
                 'compound': compound,
                 'tyre_life': tyre_life,
                 'position': position,
-                'current_pace': driver_state.get('current_pace', 0) if driver_state else 0,
-                'weather': data.get('Weather', {}),
-                'track_status': data.get('TrackStatus', 'GREEN')
+                'current_pace': engine.driver_state.get(driver, {}).get('current_pace', 0)
             }
             
             last_race_update = race_update
-            socketio.emit('race_update', race_update, broadcast=True)
+            socketio.emit('race_update', race_update)
             
             logger.info(f"[MSG {messages_processed}] Lap {lap_num} | {driver} | {compound} | Pos {position}")
             
-             # Track which drivers have data this lap (for DNF detection)
+            # Track which drivers have data this lap (for DNF detection)
             if not hasattr(kafka_listener, 'active_drivers_this_lap'):
                 kafka_listener.active_drivers_this_lap = set()
             kafka_listener.active_drivers_this_lap.add(driver)
             
             # Check for undercut opportunities every N race laps
-            if (current_race_lap > 0 and 
+            MIN_LAP_FOR_UNDERCUT = 10
+            
+            if (current_race_lap >= MIN_LAP_FOR_UNDERCUT and 
                 current_race_lap % check_interval == 0 and 
                 current_race_lap != last_checked_lap):
                 
@@ -157,78 +219,65 @@ def kafka_listener():
         if kafka_consumer:
             kafka_consumer.close()
         logger.info("Kafka consumer closed.")
-        
-def cache_driver_state(driver: str):
-    """Cache driver state in Redis."""
-    if not redis_client:
-        return
-    
-    try:
-        state = engine.get_driver_state(driver)
-        if state:
-            cache_state = {
-                "lap_number": str(state['lap_number']),
-                "tyre_age": str(state['tyre_age']),
-                "compound": state['compound'] or "UNKNOWN",
-                "position": str(state['position']) if state['position'] else "0",
-                "current_pace": str(state['current_pace']),
-                "stint": str(state.get('stint', 0))
-            }
-            redis_client.hset(f"f1:driver:{driver}", mapping=cache_state)
-            redis_client.expire(f"f1:driver:{driver}", 3600)
-    except Exception as e:
-        logger.error(f"Failed to cache driver state: {e}")
-
-def cache_prediction(ahead: str, behind: str, result: dict):
-    """Cache prediction results in Redis."""
-    if not redis_client:
-        return
-    
-    try:
-        cache_key = f"f1:prediction:{ahead}:{behind}:{current_race_lap}"
-        redis_client.hset(cache_key, mapping={
-            "timestamp": datetime.now().isoformat(),
-            "viable": str(result['viable']),
-            "time_delta": str(result['time_delta']),
-            "confidence": str(result['confidence']),
-            "recommendation": result['recommendation']
-        })
-        redis_client.expire(cache_key, 3600)
-        # Add to sorted set for quick retrieval of recent predictions
-        redis_client.zadd('f1:predictions:recent', {f'{ahead}:{behind}': current_race_lap})
-    except Exception as e:
-        logger.error(f"Failed to cache prediction: {e}")
-
-# Check for undercut opportunities and broadcast alerts
+  
+# Log prediction results to predictions.log 
 def log_prediction(ahead: str, behind: str, result: dict):
-    """Log prediction results to file for audit trail."""
     try:
         log_entry = {
             'timestamp': datetime.now().isoformat(),
             'race_lap': current_race_lap,
             'ahead': ahead,
             'behind': behind,
-            'viable': result['viable'],
-            'time_delta': result['time_delta'],
-            'confidence': result['confidence'],
-            'recommendation': result['recommendation'],
-            'pit_loss': result['pit_loss'],
-            'current_gap': result.get('current_gap', 0.0),
-            'laps_to_overcome': result.get('laps_to_overcome', 'N/A'),
-            'ahead_projected': result['ahead_projected'],
-            'behind_projected': result['behind_projected'],
-            'ahead_tire_age': result['ahead_tire_age'],
-            'ahead_compound': result['ahead_compound'],
-            'track_status': result['track_status'],
+            'viable': result.get('viable', False), 
+            'time_delta': result.get('time_delta', 0),  
+            'confidence': result.get('confidence', 0), 
+            'recommendation': result.get('recommendation', 'UNKNOWN'), 
+            'pit_loss': result.get('pit_loss', 0),  
+            'current_gap': result.get('current_gap', 0.0), 
+            'laps_to_overcome': result.get('laps_to_overcome', 'N/A'),  
+            'ahead_projected': result.get('ahead_projected', 0),  
+            'behind_projected': result.get('behind_projected', 0),  
+            'ahead_tire_age': result.get('ahead_tire_age', 0),  
+            'ahead_compound': result.get('ahead_compound', 'UNKNOWN'),
+            'track_status': result.get('track_status', 'GREEN'),
             'reason': result.get('reason', '')
         }
-        predictions_logger.info(json.dumps(log_entry))
+        logger.info(json.dumps(log_entry))
     except Exception as e:
         logger.error(f"Failed to log prediction: {e}")
-
+        
+# Print formatted undercut alert to console and logger.
+def print_undercut_alert(ahead: str, behind: str, result: dict):
+    alert = f"""
+        {'='*80}
+                            *** UNDERCUT DETECTED! ***
+        {'='*80}
+        Driver AHEAD (to undercut):   {ahead}
+        Driver BEHIND (pitting):      {behind}
+        Recommendation:               {result['recommendation']}
+        {'='*80}
+        Current Gap:                  {result['current_gap']:.2f}s
+        Time Delta (per lap):         {result['time_delta']:.2f}s gain
+        Laps to Overcome Deficit:     {result['laps_to_overcome']}
+        Confidence:                   {result['confidence'] * 100:.0f}%
+        Pit Loss:                     {result['pit_loss']:.1f}s
+        """
+    logger.info(alert)
+    print(alert)
+        
+# Check for undercut opportunities and broadcast alerts
 def check_and_broadcast_undercuts():
     sorted_drivers = get_sorted_drivers_by_position()
     alerts = []
+    
+    comparisons_made = 0
+    lapped_cars_skipped = 0
+
+    logger.info(f"\n{'='*80}")
+    logger.info(f"UNDERCUT WINDOW CHECK - Race Lap {current_race_lap}")
+    logger.info(f"Total Messages Processed: {messages_processed}")
+    logger.info(f"Drivers (sorted by position): {sorted_drivers}")
+    logger.info(f"{'='*80}\n")
     
     if len(sorted_drivers) < 2:
         return alerts
@@ -237,7 +286,37 @@ def check_and_broadcast_undercuts():
         ahead = sorted_drivers[i]
         behind = sorted_drivers[i + 1]
         
-        result = engine.predict_undercut_window(ahead, behind) 
+        # Get lap numbers for both drivers
+        ahead_state = engine.driver_state.get(ahead)
+        behind_state = engine.driver_state.get(behind)
+
+        if not ahead_state or not behind_state:
+            continue
+
+        ahead_lap = ahead_state.get('lap_number', 0)
+        behind_lap = behind_state.get('lap_number', 0)
+
+        # LAPPED CAR HANDLING: Only compare if on same lap or within 1 lap
+        lap_difference = abs(ahead_lap - behind_lap)
+        
+        logger.info(f"🔍 Checking {ahead} (Lap {ahead_lap}) vs {behind} (Lap {behind_lap}) | Diff: {lap_difference}")
+
+        if lap_difference > 1:
+            logger.debug(f"Skipping {ahead} (Lap {ahead_lap}) vs {behind} (Lap {behind_lap}) - "
+                    f"lap difference too large ({lap_difference} laps)")
+            lapped_cars_skipped += 1
+            continue
+
+        # If exactly 1 lap apart, note it but still analyze
+        if lap_difference == 1:
+            logger.info(f"⚠️  Analyzing {ahead} vs {behind} despite 1 lap difference")
+        
+        result = engine.predict_undercut_window(ahead, behind)
+        
+        if result is None:
+            continue
+        
+        comparisons_made += 1
         
         if result and result['viable']:
             # Calculate actual gap between drivers
@@ -263,21 +342,34 @@ def check_and_broadcast_undercuts():
                 'reason': result.get('reason', '')
             }
             alerts.append(alert)
+        
+            # Log to predictions.log file
+            log_prediction(ahead, behind, alert)
+            
+            # Cache prediction
             cache_prediction(ahead, behind, result)
-            log_prediction(ahead, behind, result)
-            socketio.emit('undercut_alert', alert, broadcast=True)
+            
+            # Print formatted alert to console and logger
+            print_undercut_alert(ahead, behind, alert)
+            
+            # Broadcast via WebSocket
+            socketio.emit('undercut_alert', alert)
             logger.info(f"UNDERCUT ALERT: {ahead} vs {behind} | Delta: {result['time_delta']}s")
+            
+    logger.info(f"\nUndercut Analysis Summary:")
+    logger.info(f"  - Comparisons made: {comparisons_made}")
+    logger.info(f"  - Lapped cars skipped: {lapped_cars_skipped}")
     
     return alerts
         
 # Return drivers sorted by their current position
+# Return drivers sorted by position, filtering out retired/DNF drivers.
 def get_sorted_drivers_by_position():
-    """Return drivers sorted by position, filtering out retired/DNF drivers."""
     drivers = engine.get_all_drivers()
     driver_positions = []
     
     for driver in drivers:
-        state = engine.get_driver_state(driver)
+        state = engine.driver_state.get(driver)
         if state:
             position = state.get('position')
             
@@ -298,6 +390,30 @@ def get_sorted_drivers_by_position():
     return [driver for driver, _ in valid_positions]
 
 # Flask Routes
+@app.route('/', methods=['GET'])
+def root():
+    """Root endpoint - API documentation."""
+    return jsonify({
+        'name': 'F1 Undercut Strategy Engine',
+        'version': '1.0.0',
+        'status': 'running',
+        'timestamp': datetime.now().isoformat(),
+        'endpoints': {
+            'health': 'GET /api/status',
+            'drivers': 'GET /api/drivers',
+            'track_config': 'GET /api/track-config',
+            'driver_detail': 'GET /api/driver/<driver_name>',
+            'projected_pace': 'GET /api/projected-pace/<driver_name>?laps=5',
+            'gap': 'GET /api/gap?ahead=HAM&behind=VER',
+            'compound_advantage': 'GET /api/compound-advantage?compound_a=SOFT&compound_b=MEDIUM',
+            'safety_car': 'GET /api/safety-car-status',
+            'weather': 'GET /api/weather/<driver_name>',
+            'reset': 'POST /api/reset',
+            'predictions_log': 'GET /api/predictions-log'
+        },
+        'websocket': 'ws://localhost:5000/socket.io'
+    }), 200
+
 @app.route('/api/status', methods=['GET'])
 # Health check endpoint
 def health_check():
@@ -324,7 +440,7 @@ def get_drivers():
     driver_data = []
     
     for driver in sorted(drivers):
-        state = engine.get_driver_state(driver)
+        state = engine.driver_state.get(driver)
         if state:
             driver_data.append({
                 'name': driver,
@@ -332,229 +448,16 @@ def get_drivers():
                 'position': state['position'],
                 'compound': state['compound'],
                 'tyre_age': state['tyre_age'],
-                'current_pace': round(state['current_pace'], 2) if state['current_pace'] else 0.0,
-                'stint': state.get('stint', 0),
-                'retired': state.get('retired', False),
-                'track_status': state.get('track_status', 'GREEN')
+                'current_pace': round(state['current_pace'], 2),
+                'stint': state.get('stint', 0)
             })
     
     return jsonify(driver_data), 200
 
-@app.route('/api/track_config', methods=['GET'])
+@app.route('/api/track-config', methods=['GET'])
 # Get current track configuration
 def get_track_config():
     return jsonify(engine.get_track_config()), 200
-
-@app.route('/api/driver/<driver_name>', methods=['GET'])
-def get_specific_driver(driver_name):
-    """Get detailed state for a specific driver."""
-    state = engine.get_driver_state(driver_name)
-    if state:
-        return jsonify({
-            'driver': driver_name,
-            'lap_number': state['lap_number'],
-            'position': state['position'],
-            'compound': state['compound'],
-            'tyre_age': state['tyre_age'],
-            'current_pace': round(state['current_pace'], 2),
-            'stint': state.get('stint', 0),
-            'retired': state.get('retired', False),
-            'cumulative_time': state.get('cumulative_time', 0),
-            'weather': state.get('weather', {}),
-            'track_status': state.get('track_status', 'GREEN')
-        }), 200
-    else:
-        return jsonify({'error': 'Driver not found'}), 404
-
-@app.route('/api/projected-pace/<driver_name>', methods=['GET'])
-def get_projected_pace(driver_name):
-    """Get projected pace for a driver over next N laps."""
-    future_laps = request.args.get('laps', default=5, type=int)
-    projected = engine.calculate_projected_pace(driver_name, future_laps)
-    
-    if projected:
-        return jsonify({
-            'driver': driver_name,
-            'future_laps': future_laps,
-            'projected_pace': round(projected, 2)
-        }), 200
-    else:
-        return jsonify({'error': 'Cannot calculate projection'}), 400
-
-@app.route('/api/gap/<driver_ahead>/<driver_behind>', methods=['GET'])
-def get_gap_between_drivers(driver_ahead, driver_behind):
-    """Calculate time gap between two drivers."""
-    gap = engine.calculate_gap_ahead(driver_ahead, driver_behind)
-    return jsonify({
-        'driver_ahead': driver_ahead,
-        'driver_behind': driver_behind,
-        'gap_seconds': round(gap, 2)
-    }), 200
-
-@app.route('/api/compound-advantage', methods=['GET'])
-def get_compound_advantage():
-    """Get pace advantage of one tire compound vs another."""
-    compound_a = request.args.get('compound_a', type=str)
-    compound_b = request.args.get('compound_b', type=str)
-    
-    if not compound_a or not compound_b:
-        return jsonify({'error': 'Missing compound_a or compound_b parameters'}), 400
-    
-    advantage = engine.get_compound_advantage(compound_a, compound_b)
-    return jsonify({
-        'compound_a': compound_a,
-        'compound_b': compound_b,
-        'advantage_seconds_per_lap': round(advantage, 2),
-        'description': f"{compound_a} is {abs(advantage):.2f}s/lap {'faster' if advantage > 0 else 'slower'} than {compound_b}"
-    }), 200
-
-@app.route('/api/safety-car-status', methods=['GET'])
-def get_safety_car_status():
-    """Check if safety car is currently active."""
-    return jsonify({
-        'active': engine.is_safety_car_active(),
-        'track_status': engine.track_status
-    }), 200
-
-@app.route('/api/weather/<driver_name>', methods=['GET'])
-def get_driver_weather(driver_name):
-    """Get current weather conditions for a driver's location."""
-    state = engine.get_driver_state(driver_name)
-    if state and state.get('weather'):
-        weather_dict = state['weather']
-        condition = engine.get_weather_condition(weather_dict)
-        return jsonify({
-            'driver': driver_name,
-            'condition': condition,
-            'weather_data': weather_dict
-        }), 200
-    else:
-        return jsonify({'error': 'Weather data not available'}), 404
-
-@app.route('/api/reset', methods=['POST'])
-def reset_engine():
-    """Reset the strategy engine (clear all state for new race)."""
-    engine.reset()
-    global messages_processed, undercuts_detected, current_race_lap, last_checked_lap
-    messages_processed = 0
-    undercuts_detected = 0
-    current_race_lap = 0
-    last_checked_lap = 0
-    
-    logger.info("Engine and counters reset")
-    socketio.emit('engine_reset', {'timestamp': datetime.now().isoformat()}, broadcast=True)
-    
-    return jsonify({
-        'status': 'reset',
-        'timestamp': datetime.now().isoformat()
-    }), 200
-
-@app.route('/api/driver/<driver_name>', methods=['GET'])
-def get_specific_driver(driver_name):
-    """Get specific driver's detailed state."""
-    state = engine.get_driver_state(driver_name)
-    if state:
-        return jsonify({
-            'driver': driver_name,
-            'lap_number': state['lap_number'],
-            'position': state['position'],
-            'compound': state['compound'],
-            'tyre_age': state['tyre_age'],
-            'current_pace': round(state['current_pace'], 2) if state['current_pace'] else 0.0,
-            'stint': state.get('stint', 0),
-            'retired': state.get('retired', False),
-            'cumulative_time': round(state.get('cumulative_time', 0), 2),
-            'weather': state.get('weather', {}),
-            'track_status': state.get('track_status', 'GREEN'),
-            'lap_times': [round(lt, 2) for lt in state.get('lap_times', [])[-5:]]
-        }), 200
-    else:
-        return jsonify({'error': f'Driver {driver_name} not found'}), 404
-
-@app.route('/api/projected-pace/<driver_name>', methods=['GET'])
-def get_projected_pace(driver_name):
-    """Get projected pace for a driver over next N laps."""
-    future_laps = request.args.get('laps', default=5, type=int)
-    
-    if future_laps < 1 or future_laps > 20:
-        return jsonify({'error': 'Invalid lap count (must be 1-20)'}), 400
-    
-    projected = engine.calculate_projected_pace(driver_name, future_laps)
-    
-    if projected and projected > 0:
-        state = engine.get_driver_state(driver_name)
-        return jsonify({
-            'driver': driver_name,
-            'future_laps': future_laps,
-            'projected_pace': round(projected, 2),
-            'current_pace': round(state['current_pace'], 2) if state and state['current_pace'] else 0.0,
-            'tyre_age': state['tyre_age'] if state else 0,
-            'compound': state['compound'] if state else 'UNKNOWN'
-        }), 200
-    else:
-        return jsonify({'error': 'Cannot calculate projection for this driver'}), 400
-
-@app.route('/api/gap', methods=['GET'])
-def get_gap_between_drivers():
-    """Calculate gap between two drivers."""
-    driver_ahead = request.args.get('ahead', type=str)
-    driver_behind = request.args.get('behind', type=str)
-    
-    if not driver_ahead or not driver_behind:
-        return jsonify({'error': 'Missing driver parameters (ahead, behind)'}), 400
-    
-    gap = engine.calculate_gap_ahead(driver_ahead, driver_behind)
-    
-    return jsonify({
-        'driver_ahead': driver_ahead,
-        'driver_behind': driver_behind,
-        'gap_seconds': round(gap, 2)
-    }), 200
-
-@app.route('/api/compound-advantage', methods=['GET'])
-def get_compound_advantage():
-    """Get pace advantage of one compound vs another."""
-    compound_a = request.args.get('compound_a', type=str)
-    compound_b = request.args.get('compound_b', type=str)
-    
-    if not compound_a or not compound_b:
-        return jsonify({'error': 'Missing compound parameters (compound_a, compound_b)'}), 400
-    
-    advantage = engine.get_compound_advantage(compound_a, compound_b)
-    
-    return jsonify({
-        'compound_a': compound_a.upper(),
-        'compound_b': compound_b.upper(),
-        'advantage_seconds_per_lap': round(advantage, 2),
-        'description': f"{compound_a.upper()} is {abs(advantage):.2f}s/lap {'faster' if advantage > 0 else 'slower'} than {compound_b.upper()}"
-    }), 200
-
-@app.route('/api/safety-car-status', methods=['GET'])
-def get_safety_car_status():
-    """Check if safety car is active."""
-    return jsonify({
-        'active': engine.is_safety_car_active(),
-        'track_status': engine.track_status
-    }), 200
-
-@app.route('/api/reset', methods=['POST'])
-def reset_engine():
-    """Reset the strategy engine (clear all state)."""
-    engine.reset()
-    global messages_processed, undercuts_detected, current_race_lap, last_checked_lap
-    messages_processed = 0
-    undercuts_detected = 0
-    current_race_lap = 0
-    last_checked_lap = 0
-    
-    logger.info("Engine and counters reset")
-    socketio.emit('engine_reset', {'timestamp': datetime.now().isoformat()}, broadcast=True)
-    
-    return jsonify({
-        'status': 'reset',
-        'timestamp': datetime.now().isoformat(),
-        'message': 'Strategy engine and counters have been reset'
-    }), 200
 
 # SocketIO Handlers
 # Handle client connection
@@ -575,7 +478,7 @@ def handle_connect():
     })
     
     # Broadcast updated client count to all clients
-    socketio.emit('client_count', {'count': len(connected_clients)}, broadcast=True)
+    socketio.emit('client_count', {'count': len(connected_clients)})
     
 @socketio.on('disconnect')
 # Handle client disconnection
@@ -585,7 +488,7 @@ def handle_disconnect():
     logger.info(f"Client disconnected: {client_id} (Total: {len(connected_clients)})")
     
     # Broadcast updated client count to all clients
-    socketio.emit('client_count', {'count': len(connected_clients)}, broadcast=True)
+    socketio.emit('client_count', {'count': len(connected_clients)})
     
 @socketio.on('request_status')
 # Handle client request for current status
@@ -610,7 +513,7 @@ def handle_drivers_request():
     driver_data = []
     
     for driver in sorted(drivers):
-        state = engine.get_driver_state(driver)
+        state = engine.driver_state.get(driver)
         if state:
             driver_data.append({
                 'name': driver,
@@ -618,13 +521,159 @@ def handle_drivers_request():
                 'position': state['position'],
                 'compound': state['compound'],
                 'tyre_age': state['tyre_age'],
-                'current_pace': round(state['current_pace'], 2) if state['current_pace'] else 0.0,
-                'stint': state.get('stint', 0),
-                'retired': state.get('retired', False)
+                'current_pace': round(state['current_pace'], 2),
+                'stint': state.get('stint', 0)
             })
     
     emit('drivers_response', driver_data)
+
+# Get detailed state for a specific driver.
+@app.route('/api/driver/<driver_name>', methods=['GET'])
+def get_specific_driver(driver_name):
+    state = engine.get_driver_state(driver_name)
+    if state:
+        return jsonify({
+            'driver': driver_name,
+            'lap_number': state['lap_number'],
+            'position': state['position'],
+            'compound': state['compound'],
+            'tyre_age': state['tyre_age'],
+            'current_pace': round(state['current_pace'], 2) if state['current_pace'] else 0.0,
+            'stint': state.get('stint', 0),
+            'retired': state.get('retired', False),
+            'cumulative_time': round(state.get('cumulative_time', 0), 2),
+            'weather': state.get('weather', {}),
+            'track_status': state.get('track_status', 'GREEN'),
+            'lap_times': [round(lt, 2) for lt in state.get('lap_times', [])[-5:]]
+        }), 200
+    else:
+        return jsonify({'error': f'Driver {driver_name} not found'}), 404
+
+# Get projected pace for a driver over next N laps.
+@app.route('/api/projected-pace/<driver_name>', methods=['GET'])
+def get_projected_pace(driver_name):
+    future_laps = request.args.get('laps', default=5, type=int)
     
+    if future_laps < 1 or future_laps > 20:
+        return jsonify({'error': 'Invalid lap count (must be 1-20)'}), 400
+    
+    projected = engine.calculate_projected_pace(driver_name, future_laps)
+    
+    if projected and projected > 0:
+        state = engine.get_driver_state(driver_name)
+        return jsonify({
+            'driver': driver_name,
+            'future_laps': future_laps,
+            'projected_pace': round(projected, 2),
+            'current_pace': round(state['current_pace'], 2) if state and state['current_pace'] else 0.0,
+            'tyre_age': state['tyre_age'] if state else 0,
+            'compound': state['compound'] if state else 'UNKNOWN'
+        }), 200
+    else:
+        return jsonify({'error': f'Cannot calculate projection for {driver_name}'}), 400
+
+# Calculate gap between two drivers.
+@app.route('/api/gap', methods=['GET'])
+def get_gap_between_drivers():
+    driver_ahead = request.args.get('ahead', type=str)
+    driver_behind = request.args.get('behind', type=str)
+    
+    if not driver_ahead or not driver_behind:
+        return jsonify({'error': 'Missing ahead or behind parameter'}), 400
+    
+    gap = engine.calculate_gap_ahead(driver_ahead, driver_behind)
+    
+    return jsonify({
+        'driver_ahead': driver_ahead,
+        'driver_behind': driver_behind,
+        'gap_seconds': round(gap, 2)
+    }), 200
+
+# Get pace advantage of one tire compound vs another.
+@app.route('/api/compound-advantage', methods=['GET'])
+def get_compound_advantage():
+    compound_a = request.args.get('compound_a', type=str)
+    compound_b = request.args.get('compound_b', type=str)
+    
+    if not compound_a or not compound_b:
+        return jsonify({'error': 'Missing compound_a or compound_b parameters'}), 400
+    
+    advantage = engine.get_compound_advantage(compound_a, compound_b)
+    
+    return jsonify({
+        'compound_a': compound_a,
+        'compound_b': compound_b,
+        'advantage_seconds_per_lap': round(advantage, 2),
+        'description': f"{compound_a} is {abs(advantage):.2f}s/lap {'faster' if advantage > 0 else 'slower'} than {compound_b}"
+    }), 200
+
+# Check if safety car is currently active.
+@app.route('/api/safety-car-status', methods=['GET'])
+def get_safety_car_status():
+    return jsonify({
+        'active': engine.is_safety_car_active(),
+        'track_status': engine.track_status
+    }), 200
+
+# Get current weather conditions for a driver's location.
+@app.route('/api/weather/<driver_name>', methods=['GET'])
+def get_driver_weather(driver_name):
+    state = engine.get_driver_state(driver_name)
+    if state and state.get('weather'):
+        weather_dict = state['weather']
+        condition = engine.get_weather_condition(weather_dict)
+        return jsonify({
+            'driver': driver_name,
+            'condition': condition,
+            'weather_data': weather_dict
+        }), 200
+    else:
+        return jsonify({'error': 'Weather data not available'}), 404
+
+# Reset the strategy engine (clear all state for new race).
+@app.route('/api/reset', methods=['POST'])
+def reset_engine():
+    global messages_processed, undercuts_detected, current_race_lap, last_checked_lap
+    engine.reset()
+    messages_processed = 0
+    undercuts_detected = 0
+    current_race_lap = 0
+    last_checked_lap = 0
+    
+    logger.info("Engine and counters reset")
+    
+    return jsonify({
+        'status': 'reset',
+        'timestamp': datetime.now().isoformat()
+    }), 200
+    
+# Retrieve predictions log file content.
+@app.route('/api/predictions-log', methods=['GET'])
+def get_predictions_log():
+    """Retrieve recent predictions from log file."""
+    try:
+        with open('predictions.log', 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        
+        # Parse JSON lines
+        predictions = []
+        for line in lines:
+            try:
+                if ' - ' in line:
+                    json_part = line.split(' - ', 1)[1]
+                    predictions.append(json.loads(json_part))
+            except:
+                pass
+        
+        return jsonify({
+            'total_predictions': len(predictions),
+            'predictions': predictions[-50:]  # Last 50
+        }), 200
+    except FileNotFoundError:
+        return jsonify({'error': 'Predictions log not created yet. Run producer to generate data.', 'total_predictions': 0}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 # Main Method
 if __name__ == '__main__':
     logger.info("Starting F1 Undercut Engine Flask Backend...")

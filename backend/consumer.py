@@ -20,7 +20,7 @@ class ConsumerWithStrategy:
         self.consumer = KafkaConsumer(
             "f1-telemetry",
             bootstrap_servers=bootstrap_servers,
-            auto_offset_reset="earliest",
+            auto_offset_reset="latest",
             enable_auto_commit=True,
             group_id="f1-consumer-group",
             value_deserializer=lambda x: json.loads(x.decode("utf-8")),
@@ -350,7 +350,9 @@ class ConsumerWithStrategy:
                     self.current_race_lap = lap_num
                 
                 # Check for undercut every N laps
-                if (self.current_race_lap > 0 and 
+                MIN_LAP_FOR_UNDERCUT = 10
+                
+                if (self.current_race_lap >= MIN_LAP_FOR_UNDERCUT and 
                     self.current_race_lap % self.check_interval == 0 and
                     self.current_race_lap != self.last_checked_lap):
                     self.check_undercut_opportunities()
