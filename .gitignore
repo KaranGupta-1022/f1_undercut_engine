@@ -209,11 +209,14 @@ __marimo__/
 # Project specific
 cache/
 .env
-*.log
 
 # Frontend
 node_modules/
 frontend/build/
+.env.local
 
 # Commands to run the project
 commands.txt
+
+# Project Guide
+guide.md

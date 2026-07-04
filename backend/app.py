@@ -1,14 +1,15 @@
 import json
 import logging
 import threading
-import time
 import redis
 from datetime import datetime
 from flask import Flask, jsonify, request  
-from flask_socketio import SocketIO, emit, disconnect
+from flask_socketio import SocketIO, emit
 from flask_cors import CORS
 from kafka import KafkaConsumer
 from strategy_engine import UndercutEngine
+import signal
+from pathlib import Path
 
 # Setup logging
 logging.basicConfig(
@@ -18,7 +19,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Add file handler to existing logger
-file_handler = logging.FileHandler('predictions.log', mode='w', encoding='utf-8')
+log_path = Path(__file__).resolve().parent.parent / "predictions.log"
+file_handler = logging.FileHandler(log_path, mode='w', encoding='utf-8')
 file_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
 logger.addHandler(file_handler)
 
@@ -30,7 +32,7 @@ app.config['SECRET_KEY'] = 'f1-undercut-secret-key-2024'
 CORS(app, origins=["http://localhost:3000", "http://localhost:5173", "http://localhost:8000"])
 
 # Intitialize SocketIO
-socketio = SocketIO(app, cors_allowed_origins=["http://localhost:3000", "http://localhost:5173", "http://localhost:8000"])
+socketio = SocketIO(app, cors_allowed_origins=["http://localhost:3000", "http://localhost:5173", "http://localhost:8000"], async_mode="threading")
 
 # Global Variables
 engine = UndercutEngine()
@@ -40,8 +42,10 @@ app_start_time = datetime.now()
 messages_processed = 0
 undercuts_detected = 0
 current_race_lap = 0
+race_total_laps = None
 last_race_update = None
 last_checked_lap = 0
+shutdown_event = threading.Event()
 
 try:
     redis_client = redis.Redis(
@@ -120,7 +124,7 @@ def cache_prediction(ahead: str, behind: str, result: dict):
 # Background Kafka Listener 
 # Background thread that consumes Kafka messages and broadcasts via Websocket 
 def kafka_listener():
-    global kafka_consumer, messages_processed, current_race_lap, last_race_update, undercuts_detected, last_checked_lap
+    global kafka_consumer, messages_processed, current_race_lap, race_total_laps, last_race_update, undercuts_detected, last_checked_lap
 
     try:
         kafka_consumer = KafkaConsumer(
@@ -137,6 +141,10 @@ def kafka_listener():
         check_interval = 5
         
         for message in kafka_consumer:
+            
+            if shutdown_event.is_set():
+                break
+            
             data = message.value
             messages_processed += 1
             
@@ -148,6 +156,8 @@ def kafka_listener():
             tyre_life = data.get('TyreLife')
             position = data.get('Position')
             session_name = data.get('SessionName', {}).get('EventName')
+            race_total_laps = data.get('TotalLaps') or race_total_laps
+            engine.race_total_laps = race_total_laps
             
             # Set track on first message with session name 
             if session_name and not engine.track_name:
@@ -160,21 +170,68 @@ def kafka_listener():
                 
             # Cache race session
             set_race_session(session_name)
+            
+            lap_data = {
+                "LapNumber": data.get("LapNumber"),
+                "LapTime": data.get("LapTime"),
+                "Compound": data.get("Compound"),
+                "TyreLife": data.get("TyreLife"),
+                "Position": data.get("Position"),
+                "Stint": data.get("Stint"),
+                "Weather": data.get("Weather", {}),
+                "TRACK_STATUS": data.get("TrackStatus", "1")
+            }
                 
             # Updata engine with lap data
-            engine.update_driver_state(driver, data)
-            current_race_lap = lap_num if lap_num else current_race_lap
-            
+            previous_race_lap = current_race_lap
+            engine.update_driver_state(driver, lap_data)
+
             # Cache driver state in Redis
             cache_driver_state(driver)
-            
-            # Mark retired drivers based on inactivity (check every lap)
-            if lap_num and lap_num > current_race_lap:
-                # New lap detected - mark drivers who didn't send data
-                if hasattr(kafka_listener, 'active_drivers_this_lap'):
-                    engine.mark_inactive_drivers_retired(kafka_listener.active_drivers_this_lap)
+
+            # Update current lap and detect new lap rollover
+            if lap_num is not None:
+                if lap_num > previous_race_lap:
+                    # New lap detected - mark drivers who didn't send data in previous lap
+                    if hasattr(kafka_listener, 'active_drivers_this_lap'):
+                        engine.mark_inactive_drivers_retired(kafka_listener.active_drivers_this_lap)
+
+                    # Reset the active set for the new lap (we will populate as messages arrive)
                     kafka_listener.active_drivers_this_lap = set()
-                current_race_lap = lap_num
+                    current_race_lap = lap_num
+
+                    # Schedule an undercut check shortly after lap rollover to allow remaining
+                    # drivers' messages for this lap to be processed. This avoids analyzing
+                    # when only the first driver's message for the lap has arrived.
+                    def schedule_undercut_check(lap_to_check):
+                        def _run():
+                            global undercuts_detected, last_checked_lap
+                            try:
+                                logger.info(f"Scheduled undercut check running for lap {lap_to_check}")
+                                alerts = check_and_broadcast_undercuts()
+                                undercuts_detected += len(alerts)
+                                last_checked_lap = lap_to_check
+                            except Exception as e:
+                                logger.error(f"Scheduled undercut check failed: {e}")
+
+                        # Cancel any existing scheduled check for safety
+                        try:
+                            if hasattr(kafka_listener, 'check_timer') and kafka_listener.check_timer is not None:
+                                kafka_listener.check_timer.cancel()
+                        except Exception:
+                            pass
+
+                        t = threading.Timer(0.25, _run)
+                        kafka_listener.check_timer = t
+                        t.daemon = True
+                        t.start()
+
+                    # Only schedule if this lap meets minimum undercut threshold
+                    MIN_LAP_FOR_UNDERCUT = 10
+                    if lap_num >= MIN_LAP_FOR_UNDERCUT:
+                        schedule_undercut_check(lap_num)
+                else:
+                    current_race_lap = max(current_race_lap, lap_num)
             
             # Broadcast lap update to all clients
             race_update = {
@@ -198,21 +255,6 @@ def kafka_listener():
                 kafka_listener.active_drivers_this_lap = set()
             kafka_listener.active_drivers_this_lap.add(driver)
             
-            # Check for undercut opportunities every N race laps
-            MIN_LAP_FOR_UNDERCUT = 10
-            
-            if (current_race_lap >= MIN_LAP_FOR_UNDERCUT and 
-                current_race_lap % check_interval == 0 and 
-                current_race_lap != last_checked_lap):
-                
-                # Mark drivers who haven't appeared recently as retired
-                engine.mark_inactive_drivers_retired(kafka_listener.active_drivers_this_lap)
-                kafka_listener.active_drivers_this_lap = set()  # Reset for next lap
-                logger.info(f"Checking undercuts at Race Lap {current_race_lap}")
-                undercut_alerts = check_and_broadcast_undercuts()
-                undercuts_detected += len(undercut_alerts)
-                last_checked_lap = current_race_lap
-                
     except Exception as e:
         logger.error(f"Kafka listener error: {e}", exc_info=True)
     finally:
@@ -652,7 +694,7 @@ def reset_engine():
 def get_predictions_log():
     """Retrieve recent predictions from log file."""
     try:
-        with open('predictions.log', 'r', encoding='utf-8') as f:
+        with open(log_path, 'r', encoding='utf-8') as f:
             lines = f.readlines()
         
         # Parse JSON lines
@@ -673,6 +715,32 @@ def get_predictions_log():
         return jsonify({'error': 'Predictions log not created yet. Run producer to generate data.', 'total_predictions': 0}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    
+
+def handle_shutdown(signum, frame):
+    logger.info(f"Shutdown signal received: {signum}")
+    shutdown_event.set()
+    try:
+        if kafka_consumer is not None:
+            kafka_consumer.close()
+    except Exception:
+        pass
+
+    try:
+        if hasattr(kafka_listener, 'check_timer') and kafka_listener.check_timer is not None:
+            kafka_listener.check_timer.cancel()
+    except Exception:
+        pass
+
+    try:
+        socketio.stop()
+    except Exception:
+        pass
+
+    raise SystemExit(0)
+
+signal.signal(signal.SIGINT, handle_shutdown)
+signal.signal(signal.SIGTERM, handle_shutdown)
 
 # Main Method
 if __name__ == '__main__':

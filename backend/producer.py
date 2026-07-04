@@ -13,7 +13,7 @@ cache_dir.mkdir(parents=True, exist_ok=True)
 fastf1.Cache.enable_cache(str(cache_dir))
 
 class RaceSimulator:
-    def __init__(self, year=2024, event="Monaco", session_type="R", bootstrap_servers="localhost:9092", delay=1.0, max_laps=None):
+    def __init__(self, year=2024, event="Spanish", session_type="R", bootstrap_servers="localhost:9092", delay=1.0, max_laps=None):
         self.delay = delay
         self.max_laps = max_laps
         self.producer = KafkaProducer(
@@ -27,6 +27,7 @@ class RaceSimulator:
         
         # Sort laps by LapNumber first, then by driver (for consistent ordering)
         self.laps = self.session.laps.sort_values(['LapNumber', 'Driver']).reset_index(drop=True)
+        self.total_race_laps = int(self.laps['LapNumber'].max()) if not self.laps['LapNumber'].empty else None
         
         print(f"Loaded {len(self.laps)} total laps")
         print(f"Unique drivers: {self.laps['Driver'].nunique()}")
@@ -125,10 +126,11 @@ class RaceSimulator:
                     "Position": int(lap.get("Position")) if not pd.isna(lap.get("Position")) else None,
                     "SessionName": {"EventName": getattr(self.session.event, "EventName", None)},
                     "Weather": self.get_weather_dict(lap),
-                    "TrackStatus": self.get_track_status_for_lap(lap)
+                    "TrackStatus": self.get_track_status_for_lap(lap),
+                    "TotalLaps": self.total_race_laps
                 }
                 
-                if self.max_laps and payload['LapNumber'] > self.max_laps:
+                if self.max_laps is not None and payload["LapNumber"] is not    None and payload["LapNumber"] > self.max_laps:
                     print(f"Reached max laps limit: {self.max_laps}. Stopping simulation.")
                     break
                 

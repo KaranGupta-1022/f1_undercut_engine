@@ -12,10 +12,10 @@ TRACK_CONFIG = {
         "degradation_rates": {"SOFT": 0.05, "MEDIUM": 0.03, "HARD": 0.02}
     },
     "Belgian Grand Prix": {
-        "pit_loss": 17.0,
+        "pit_loss": 18.0,
         "amortization_laps": 5,
         "fresh_tire_advantage": 2.5,
-        "degradation_rates": {"SOFT": 0.14, "MEDIUM": 0.09, "HARD": 0.05}
+        "degradation_rates": {"SOFT": 0.12, "MEDIUM": 0.08, "HARD": 0.05}
     },
     "British Grand Prix": {
         "pit_loss": 20.0,
@@ -208,6 +208,7 @@ class UndercutEngine:
         self.weather = {}
         self.track_status = "GREEN"
         self.track_name = None
+        self.race_total_laps = None
         
          # Default constants (overridden by set_track)
         self.PIT_LOSS = 20.0
@@ -221,15 +222,32 @@ class UndercutEngine:
       
     # Load track-specific configuration and update instance constants     
     def set_track(self, track_name: str):
-        if track_name in TRACK_CONFIG:
-            config = TRACK_CONFIG[track_name]
+        if not track_name:
+            self.track_name = track_name
+            return
+
+        normalized_track = track_name.strip()
+        track_aliases = {
+            "Belgium": "Belgian Grand Prix",
+            "Monaco": "Monaco Grand Prix",
+            "Britain": "British Grand Prix",
+            "Spain": "Spanish Grand Prix",
+            "Austria": "Austrian Grand Prix",
+            "Hungary": "Hungarian Grand Prix",
+            "Netherlands": "Dutch Grand Prix",
+            "Italy": "Italian Grand Prix",
+            "Singapore": "Singapore Grand Prix",
+        }
+
+        resolved_track = track_aliases.get(normalized_track, normalized_track)
+
+        if resolved_track in TRACK_CONFIG:
+            config = TRACK_CONFIG[resolved_track]
             self.PIT_LOSS = config.get("pit_loss", 20.0)
             self.AMORTIZATION_LAPS = config.get("amortization_laps", 3)
             self.FRESH_TIRE_ADVANTAGE = config.get("fresh_tire_advantage", 1.5)
             self.DEGRADATION_RATES = config.get("degradation_rates", {"SOFT": 0.08, "MEDIUM": 0.05, "HARD": 0.03})
-            self.track_name = track_name
-        else:
-            self.track_name = track_name
+        self.track_name = normalized_track
             
     # Return current track configuration.
     def get_track_config(self) -> dict:
@@ -519,7 +537,14 @@ class UndercutEngine:
             return self._create_error_response(
                 f"Lap difference too large: {driver_ahead} on Lap {ahead_lap}, {driver_behind} on Lap {behind_lap} ({lap_difference} laps apart)"
             )
-        
+
+        if self.race_total_laps is not None:
+            remaining_laps = self.race_total_laps - max(ahead_lap, behind_lap)
+            if remaining_laps < 5:
+                return self._create_error_response(
+                    f"Too late in the race ({remaining_laps} laps remaining) for a realistic undercut"
+                )
+
         # Checking that we have necessary info 
         # Need at least 5 laps for stable predictions
         if not ahead["lap_times"] or not behind["lap_times"]:
@@ -690,3 +715,4 @@ class UndercutEngine:
         self.weather.clear()
         self.track_status = "GREEN"
         self.track_name = None
+        self.race_total_laps = None
