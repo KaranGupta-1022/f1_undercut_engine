@@ -1,9 +1,10 @@
 import json
 import logging
+import os
 import threading
 import redis
 from datetime import datetime
-from flask import Flask, jsonify, request  
+from flask import Flask, jsonify, request
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
 from kafka import KafkaConsumer
@@ -11,7 +12,16 @@ from strategy_engine import UndercutEngine
 import signal
 from pathlib import Path
 
+KAFKA_BOOTSTRAP = os.environ.get('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
+REDIS_HOST = os.environ.get('REDIS_HOST', 'localhost')
+REDIS_PORT = int(os.environ.get('REDIS_PORT', '6379'))
+FLASK_SECRET_KEY = os.environ.get('FLASK_SECRET_KEY', 'dev-only-change-me')
+CORS_ORIGINS = os.environ.get(
+    'CORS_ORIGINS', 'http://localhost:3000,http://localhost:5173,http://localhost:8000'
+).split(',')
+
 # Setup logging
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -26,13 +36,14 @@ logger.addHandler(file_handler)
 
 # Initialize Flask app
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'f1-undercut-secret-key-2024'
+app.config['SECRET_KEY'] = FLASK_SECRET_KEY
 
 # Enable CORS for all routes
-CORS(app, origins=["http://localhost:3000", "http://localhost:5173", "http://localhost:8000"])
+CORS(app, origins=CORS_ORIGINS)
 
 # Intitialize SocketIO
-socketio = SocketIO(app, cors_allowed_origins=["http://localhost:3000", "http://localhost:5173", "http://localhost:8000"], async_mode="threading")
+socketio = SocketIO(app, cors_allowed_origins=CORS_ORIGINS, async_mode="threading")
+
 
 # Global Variables
 engine = UndercutEngine()
@@ -49,16 +60,17 @@ shutdown_event = threading.Event()
 
 try:
     redis_client = redis.Redis(
-        host='localhost',
-        port=6379,
+        host=REDIS_HOST,
+        port=REDIS_PORT,
         db=0,
         decode_responses=True
     )
     redis_client.ping()
-    logger.info('Connected to Redis at localhost:6379')
+    logger.info(f'Connected to Redis at {REDIS_HOST}:{REDIS_PORT}')
 except Exception as e:
     logger.error(f'Failed to connect to Redis: {e}')
     redis_client = None
+
 
 # Cache the current race session in Redis
 def set_race_session(session_name):
@@ -129,7 +141,7 @@ def kafka_listener():
     try:
         kafka_consumer = KafkaConsumer(
             'f1-telemetry',
-            bootstrap_servers='localhost:9092',
+            bootstrap_servers=KAFKA_BOOTSTRAP,
             auto_offset_reset='latest',
             enable_auto_commit=True,
             group_id='f1-flask-group',
@@ -745,7 +757,8 @@ signal.signal(signal.SIGTERM, handle_shutdown)
 # Main Method
 if __name__ == '__main__':
     logger.info("Starting F1 Undercut Engine Flask Backend...")
-    logger.info("CORS enabled for: http://localhost:3000, http://localhost:5173")
+    logger.info(f"CORS enabled for: {', '.join(CORS_ORIGINS)}")
+
     
     # Start Kafka listener in background thread
     listener_thread = threading.Thread(target=kafka_listener, daemon=True)
