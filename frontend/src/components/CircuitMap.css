@@ -1,0 +1,43 @@
+.circuit-card {
+  background: #12173a;
+  border: 1px solid #232a5c;
+  border-top: 3px solid #e10600;
+  border-radius: 10px;
+  padding: 1.25rem 1.5rem;
+}
+
+.circuit-card h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 1rem 0;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #c8cce0;
+}
+
+.panel-tick {
+  width: 3px;
+  height: 14px;
+  background: #e10600;
+  display: inline-block;
+  border-radius: 2px;
+}
+
+.circuit-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.circuit-credit {
+  margin: 0.75rem 0 0 0;
+  font-size: 0.65rem;
+  color: #565f8c;
+  text-align: right;
+}
+
+.circuit-credit a {
+  color: #8a92b2;
+}

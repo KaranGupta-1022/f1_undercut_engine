@@ -1,0 +1,173 @@
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  background: #12173a;
+  border: 1px solid #232a5c;
+  border-top: 3px solid #e10600;
+  border-radius: 10px;
+  padding: 1rem 1.5rem;
+}
+
+.header-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.header-flag {
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  background-image: conic-gradient(
+    #0a0e27 90deg,
+    #ffffff 90deg 180deg,
+    #0a0e27 180deg 270deg,
+    #ffffff 270deg
+  );
+  background-size: 10px 10px;
+  border: 1px solid #232a5c;
+}
+
+.header-title {
+  font-size: 1.15rem;
+  margin: 0;
+  color: #ffffff;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+}
+
+.header-subtitle {
+  margin: 0.15rem 0 0 0;
+  font-size: 0.7rem;
+  color: #8a92b2;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.header-stats {
+  display: flex;
+  gap: 2rem;
+}
+
+.header-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.header-stat-label {
+  font-size: 0.65rem;
+  color: #8a92b2;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.header-stat-value {
+  font-size: 1rem;
+  font-weight: 700;
+  font-family: Consolas, 'SFMono-Regular', Menlo, monospace;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.track-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.9rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.track-pill::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.track-pill-clear {
+  background: rgba(46, 204, 113, 0.12);
+  color: #2ecc71;
+}
+.track-pill-clear::before {
+  background: #2ecc71;
+  box-shadow: 0 0 6px #2ecc71;
+}
+
+.track-pill-caution {
+  background: rgba(255, 209, 46, 0.12);
+  color: #ffd12e;
+}
+.track-pill-caution::before {
+  background: #ffd12e;
+  box-shadow: 0 0 6px #ffd12e;
+}
+
+.track-pill-danger {
+  background: rgba(225, 6, 0, 0.14);
+  color: #ff4b42;
+}
+.track-pill-danger::before {
+  background: #ff4b42;
+  box-shadow: 0 0 6px #ff4b42;
+}
+
+.header-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: #8a92b2;
+}
+
+.header-status .dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.header-status .dot.connected {
+  background-color: #2ecc71;
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+.header-status .dot.disconnected {
+  background-color: #e74c3c;
+  box-shadow: 0 0 8px #e74c3c;
+}
+
+@keyframes pulse-dot {
+  0%, 100% {
+    box-shadow: 0 0 6px #2ecc71;
+  }
+  50% {
+    box-shadow: 0 0 14px #2ecc71;
+  }
+}
+
+.header-clients {
+  color: #8a92b2;
+}
+
+@media (max-width: 900px) {
+  .header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

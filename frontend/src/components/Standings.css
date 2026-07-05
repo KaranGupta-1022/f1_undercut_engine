@@ -1,0 +1,88 @@
+.standings-card {
+  background: #12173a;
+  border: 1px solid #232a5c;
+  border-top: 3px solid #e10600;
+  border-radius: 10px;
+  padding: 1.25rem 1.5rem;
+}
+
+.standings-card h2 {
+  margin: 0 0 1rem 0;
+  font-size: 1.1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.standings-empty {
+  color: #8a92b2;
+  text-align: center;
+  padding: 2rem 0;
+}
+
+.standings-table-wrap {
+  overflow-x: auto;
+}
+
+.standings-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.standings-table th {
+  text-align: left;
+  color: #8a92b2;
+  font-weight: 500;
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid #232a5c;
+}
+
+.standings-table td {
+  padding: 0.45rem 0.6rem;
+  border-bottom: 1px solid #1b2150;
+  font-family: Consolas, 'SFMono-Regular', Menlo, monospace;
+}
+
+.standings-driver {
+  font-weight: 700;
+  font-family: inherit;
+  letter-spacing: 0.03em;
+}
+
+.standings-table tbody tr {
+  transition: background-color 0.15s ease;
+}
+
+.standings-table tbody tr:hover,
+.standings-row-active {
+  background-color: rgba(225, 6, 0, 0.08);
+}
+
+.compound-badge {
+  display: inline-block;
+  min-width: 62px;
+  text-align: center;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #0a0e27;
+  letter-spacing: 0.03em;
+}
+
+.standings-card h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.panel-tick {
+  width: 3px;
+  height: 14px;
+  background: #e10600;
+  display: inline-block;
+  border-radius: 2px;
+}

@@ -1,0 +1,63 @@
+.chart-card {
+  background: #12173a;
+  border: 1px solid #232a5c;
+  border-top: 3px solid #e10600;
+  border-radius: 10px;
+  padding: 1.25rem 1.5rem;
+}
+
+.chart-card h2 {
+  margin: 0 0 1rem 0;
+  font-size: 1.1rem;
+  color: #ffffff;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.chart-empty {
+  color: #8a92b2;
+  text-align: center;
+  padding: 3rem 0;
+}
+
+.chart-tooltip {
+  background: #0a0e27;
+  border: 1px solid #232a5c;
+  border-left-width: 3px;
+  border-radius: 6px;
+  padding: 0.5rem 0.85rem;
+  font-size: 0.85rem;
+  min-width: 120px;
+}
+
+.chart-tooltip-driver {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.2rem;
+}
+
+.chart-tooltip-lap {
+  color: #8a92b2;
+  font-size: 0.75rem;
+  margin-bottom: 0.3rem;
+}
+
+.chart-tooltip-time {
+  font-family: Consolas, 'SFMono-Regular', Menlo, monospace;
+  font-size: 1.05rem;
+  color: #ffffff;
+}
+
+.chart-card h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.panel-tick {
+  width: 3px;
+  height: 14px;
+  background: #e10600;
+  display: inline-block;
+  border-radius: 2px;
+}

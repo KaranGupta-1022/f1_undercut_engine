@@ -1,88 +1,50 @@
-.app {
+.dashboard {
   min-height: 100vh;
+  display: grid;
+  grid-template-columns: 400px 1fr 320px;
+  grid-template-areas:
+    "header header header"
+    "left main right";
+  gap: 1.25rem;
+  padding: 1.25rem;
+  align-items: start;
+}
+
+.dashboard-header {
+  grid-area: header;
+}
+
+.dashboard-left {
+  grid-area: left;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  padding: 3rem 1.5rem;
-  text-align: center;
+  gap: 1.25rem;
+  min-width: 0;
 }
 
-.app h1 {
-  font-size: 1.75rem;
-  margin-bottom: 0.5rem;
-}
-
-.subtitle {
-  color: #8a92b2;
-  margin-bottom: 2rem;
-}
-
-.card {
-  background: #12173a;
-  border: 1px solid #232a5c;
-  border-radius: 10px;
-  padding: 1.5rem 2rem;
-  margin-bottom: 1.5rem;
-  width: 100%;
-  max-width: 480px;
-}
-
-.status-row {
+.dashboard-main {
+  grid-area: main;
+  min-width: 0;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.6rem;
-  font-size: 1.1rem;
-  margin-bottom: 0.5rem;
+  flex-direction: column;
+  gap: 1.25rem;
 }
 
-.dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  display: inline-block;
+.dashboard-right {
+  grid-area: right;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  min-width: 0;
 }
 
-.dot.connected {
-  background-color: #2ecc71;
-  box-shadow: 0 0 8px #2ecc71;
-}
-
-.dot.disconnected {
-  background-color: #e74c3c;
-  box-shadow: 0 0 8px #e74c3c;
-}
-
-.meta {
-  color: #8a92b2;
-  font-size: 0.9rem;
-}
-
-.stats-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1rem;
-  text-align: left;
-}
-
-.stat-label {
-  color: #8a92b2;
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-
-.stat-value {
-  font-size: 1.3rem;
-  font-weight: 600;
-}
-
-.error-text {
-  color: #e74c3c;
-}
-
-.next-phase {
-  color: #8a92b2;
-  font-size: 0.9rem;
-  margin-top: 1rem;
+@media (max-width: 900px) {
+  .dashboard {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "header"
+      "left"
+      "main"
+      "right";
+  }
 }
