@@ -2,18 +2,18 @@
 
 Real-time F1 race strategy predictions — streaming lap telemetry through Kafka to a live undercut-viability model and a WebSocket dashboard.
 
-Python
-Kafka
-React
-Docker
-License: MIT
-CI
+![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
+![Kafka](https://img.shields.io/badge/Kafka-3.5-000000?logo=apachekafka&logoColor=white)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-yellow.svg)
+![CI](https://github.com/KaranGupta-1022/f1_undercut_engine/actions/workflows/ci.yml/badge.svg)
 
 ## Demo
 
-demo
+![demo](docs/demo.gif)
 
-*Live demo was deployed on a temporary GCP VM for testing and has since been taken down (see[DEPLOYMENT.md](DEPLOYMENT.md)).*
+*Live demo was deployed on a temporary GCP VM for testing and has since been taken down (see [DEPLOYMENT.md](DEPLOYMENT.md)).*
 
 ## Overview
 
@@ -100,8 +100,8 @@ Every push and PR runs backend tests (`pytest`), lint (`ruff`), and frontend lin
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE)
 
 ## Contact
 
-Karan Gupta — [GitHub](https://github.com/KaranGupta-1022) · [[karangu1022@gmail.com](mailto:karangu1022@gmail.com)]
+Karan Gupta — [karangu1022@gmail.com](mailto:karangu1022@gmail.com)
