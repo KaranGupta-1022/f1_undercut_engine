@@ -1,13 +1,13 @@
 # F1 Undercut Strategy Engine
 
-Real-time F1 race strategy predictions — streaming lap telemetry through Kafka to a live undercut-viability model and a WebSocket dashboard.
-
 ![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
 ![Kafka](https://img.shields.io/badge/Kafka-3.5-000000?logo=apachekafka&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![CI](https://github.com/KaranGupta-1022/f1_undercut_engine/actions/workflows/ci.yml/badge.svg)
+
+Real-time F1 race strategy predictions: a Kafka pipeline streams lap-by-lap telemetry from historical race sessions into a tyre-degradation model that flags viable undercut pit-stop windows, pushed live to a WebSocket dashboard as the race unfolds.
 
 ## Demo
 
