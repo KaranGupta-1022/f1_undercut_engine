@@ -32,10 +32,17 @@ This project replays historical F1 race sessions (via [FastF1](https://docs.fast
 
 ## Architecture
 
-```
-FastF1 → producer.py → Kafka (f1-telemetry) → app.py (consumer + UndercutEngine) → Flask-SocketIO → React dashboard
-                                                              ↕
-                                                            Redis (live state/predictions cache)
+```mermaid
+flowchart LR
+    FF1[FastF1 API / cached session data] --> PROD[producer.py<br/>RaceSimulator]
+    PROD -->|JSON lap messages| KAFKA[(Kafka topic<br/>f1-telemetry)]
+    KAFKA --> APP[app.py<br/>kafka_listener thread]
+    APP --> ENGINE[UndercutEngine<br/>strategy_engine.py]
+    ENGINE --> APP
+    APP -->|race_update, undercut_alert,<br/>track_info, client_count| SOCKET[Flask-SocketIO]
+    SOCKET -->|WebSocket| REACT[React dashboard<br/>Vite]
+    APP -.driver state, predictions.-> REDIS[(Redis)]
+    APP -.provisioned, not yet written to.-> TSDB[(TimescaleDB)]
 ```
 
 Full diagram and data contracts: [ARCHITECTURE.md](ARCHITECTURE.md)
