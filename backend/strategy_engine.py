@@ -578,6 +578,8 @@ class UndercutEngine:
         ahead_projected = ahead["current_pace"] + (ahead_degradation * ahead["tyre_age"])
         
         # Project behind's lap after pit stop
+        # Pit loss is spread over AMORTIZATION_LAPS rather than charged entirely to lap 1,
+        # since a driver on fresh tyres recoups some of that loss over the next few laps
         behind_best = min(behind["lap_times"][-5:])
         pit_loss_per_lap = pit_loss / self.AMORTIZATION_LAPS
         
@@ -588,12 +590,15 @@ class UndercutEngine:
         # Calculate compound advantage (if behind switches to faster compound)
         compound_advantage = self.get_compound_advantage(behind_compound, ahead_compound)
         
-        behind_projected = (behind_best + 
-                           pit_loss_per_lap - 
-                           self.FRESH_TIRE_ADVANTAGE - 
+        # behind_projected = best recent lap + amortized pit loss, minus fresh-tyre pace gain
+        # and any compound advantage from switching to a faster tyre
+        behind_projected = (behind_best +
+                           pit_loss_per_lap -
+                           self.FRESH_TIRE_ADVANTAGE -
                            compound_advantage)
-        
-        # Calculate time delta (per lap advantage)
+
+        # Positive time_delta_per_lap means the pitting (behind) driver gains time per lap
+        # relative to the driver staying out ahead - the core undercut signal
         time_delta_per_lap = ahead_projected - behind_projected
         
         # Calculate actual gap between drivers
