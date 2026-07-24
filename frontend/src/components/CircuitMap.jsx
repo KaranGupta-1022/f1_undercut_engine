@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { getCircuitSvgUrl } from '../utils/circuits'
 import './CircuitMap.css'
 
@@ -7,9 +7,11 @@ function CircuitMap({ track }) {
   const svgUrl = getCircuitSvgUrl(track)
   const showFallback = !svgUrl || imageFailed
 
-  useEffect(() => {
+  const [prevSvgUrl, setPrevSvgUrl] = useState(svgUrl)
+  if (svgUrl !== prevSvgUrl) {
+    setPrevSvgUrl(svgUrl)
     setImageFailed(false)
-  }, [svgUrl])
+  }
 
   return (
     <div className="circuit-card">

@@ -14,3 +14,7 @@ python-socketio>=5.11.0
 
 # Redis
 redis>=5.0.0
+
+# Dev/CI
+pytest>=8.0.0
+ruff>=0.6.0

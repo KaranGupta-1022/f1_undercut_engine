@@ -81,11 +81,8 @@ function App() {
     }
   }, [socket])
 
-  useEffect(() => {
-    if (selectedDriver) return
-    const leader = Object.entries(driverStats).find(([, stats]) => stats.position === 1)
-    if (leader) setSelectedDriver(leader[0])
-  }, [driverStats, selectedDriver])
+  const leaderId = Object.entries(driverStats).find(([, stats]) => stats.position === 1)?.[0]
+  const displayedDriver = selectedDriver ?? leaderId
 
   return (
     <div className="dashboard">
@@ -117,7 +114,7 @@ function App() {
       </main>
 
       <aside className="dashboard-right">
-        <SelectedDriverPanel driver={selectedDriver} stats={driverStats[selectedDriver]} />
+        <SelectedDriverPanel driver={displayedDriver} stats={driverStats[displayedDriver]} />
         <CircuitMap track={track} />
       </aside>
     </div>

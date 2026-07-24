@@ -1,17 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { io } from 'socket.io-client'
 import { WS_URL } from '../config'
 
 export function useSocket() {
-  const socketRef = useRef(null)
+  const [socket] = useState(() => io(WS_URL, { transports: ['websocket', 'polling'] }))
   const [connected, setConnected] = useState(false)
 
   useEffect(() => {
-    const socket = io(WS_URL, {
-      transports: ['websocket', 'polling'],
-    })
-    socketRef.current = socket
-
     function handleConnect() {
       setConnected(true)
     }
@@ -28,7 +23,7 @@ export function useSocket() {
       socket.off('disconnect', handleDisconnect)
       socket.disconnect()
     }
-  }, [])
+  }, [socket])
 
-  return { socket: socketRef.current, connected }
+  return { socket, connected }
 }

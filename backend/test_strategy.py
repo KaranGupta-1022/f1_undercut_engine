@@ -1,9 +1,12 @@
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent))
 
-from strategy_engine import UndercutEngine
 from datetime import timedelta
+
+from strategy_engine import UndercutEngine
+
 
 # Test cases to check lap_time_to_seconds funtion
 def test_lap_time_conversion():

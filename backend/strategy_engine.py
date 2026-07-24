@@ -1,5 +1,5 @@
 from datetime import timedelta
-from typing import Dict, Optional, List
+from typing import ClassVar
 
 # Track-specific configurations
 # Note: Keys must match the first word of EventName from FastF1
@@ -162,7 +162,7 @@ TRACK_CONFIG = {
 class UndercutEngine:
     # Tire compound pace advantage (seconds per lap)
     # How much faster one compound is vs another
-    COMPOUND_ADVANTAGE = {
+    COMPOUND_ADVANTAGE: ClassVar[dict] = {
         ("SOFT", "MEDIUM"): 0.5,   # SOFT is 0.5s/lap faster than MEDIUM
         ("SOFT", "HARD"): 0.8,     # SOFT is 0.8s/lap faster than HARD
         ("MEDIUM", "HARD"): 0.3,   # MEDIUM is 0.3s/lap faster than HARD
@@ -170,19 +170,19 @@ class UndercutEngine:
         ("HARD", "SOFT"): -0.8,    # HARD is 0.8s/lap slower than SOFT
         ("HARD", "MEDIUM"): -0.3,  # HARD is 0.3s/lap slower than MEDIUM
     }
-    
-    SAFETY_CAR_THRESHOLD = 5.0 # seconds gap threshold to consider pitting under safety car    
-    
+
+    SAFETY_CAR_THRESHOLD = 5.0 # seconds gap threshold to consider pitting under safety car
+
     # Weather impact on tire degradation
-    WEATHER_IMPACTS = {
+    WEATHER_IMPACTS: ClassVar[dict] = {
         "rain": 0.5,
         "dry": 1.0,
         "hot": 1.2,
         "cool": 0.9
     }
-    
+
     # Track status codes
-    TRACK_STATUS_CODES = {
+    TRACK_STATUS_CODES: ClassVar[dict] = {
         "1": "GREEN",
         "2": "YELLOW",
         "4": "SAFETY_CAR",
@@ -260,7 +260,7 @@ class UndercutEngine:
         }
 
     # Convert timedelta or string to seconds 
-    def lap_time_to_seconds(self, lap_time)-> Optional[float]:
+    def lap_time_to_seconds(self, lap_time)-> float | None:
         if lap_time is None:
             return None
         if isinstance(lap_time, timedelta):
@@ -289,7 +289,7 @@ class UndercutEngine:
                     return int(minutes) * 60 + float(seconds)
                 else:
                     return float(lap_time)
-            except:
+            except (ValueError, IndexError):
                 return None
         return float(lap_time)
     
@@ -314,7 +314,7 @@ class UndercutEngine:
         return parsed
 
     # Determine weather condition from weather data
-    def get_weather_condition(self, weather_dict: Dict) -> str:
+    def get_weather_condition(self, weather_dict: dict) -> str:
         if not weather_dict:
             return "dry"
 
@@ -458,7 +458,7 @@ class UndercutEngine:
         return max(gap, 0.0)  # Gap can't be negative
             
     # Calculate projected pace for a driver (Accounting for tire degradation and waeather)
-    def calculate_projected_pace(self, driver: str, future_laps: int = 1) -> Optional[float]:
+    def calculate_projected_pace(self, driver: str, future_laps: int = 1) -> float | None:
         if driver not in self.driver_state:
             return 0.0
         
@@ -511,7 +511,7 @@ class UndercutEngine:
     # confidence (float): 0.0 - 1.0
     # reason  (str): explanation 
     # pit_loss (float): estimated pit stop loss time
-    def predict_undercut_window(self, driver_ahead: str, driver_behind: str) -> Optional[dict]:
+    def predict_undercut_window(self, driver_ahead: str, driver_behind: str) -> dict | None:
         if driver_ahead not in self.driver_state or driver_behind not in self.driver_state: 
             return self._create_error_response("Driver state not found")
             
@@ -522,11 +522,10 @@ class UndercutEngine:
         ahead_pos = ahead.get("position")
         behind_pos = behind.get("position")
         
-        if ahead_pos is not None and behind_pos is not None:
-            if ahead_pos > behind_pos:
-                return self._create_error_response(
-                    f"Position error: {driver_ahead} (P{ahead_pos}) is not ahead of {driver_behind} (P{behind_pos})"
-                )
+        if ahead_pos is not None and behind_pos is not None and ahead_pos > behind_pos:
+            return self._create_error_response(
+                f"Position error: {driver_ahead} (P{ahead_pos}) is not ahead of {driver_behind} (P{behind_pos})"
+            )
                 
          # LAP NUMBER VALIDATION: Warn if drivers are on different laps (lapped cars)
         ahead_lap = ahead.get("lap_number", 0)
@@ -618,9 +617,6 @@ class UndercutEngine:
         # F1 races typically have 10-20 laps left for strategy
         max_recovery_laps = 15
         
-        # Final time delta considers both per-lap advantage and gap
-        time_delta = time_delta_per_lap 
-        
         # Viability check - must consider both pace AND gap
         if self.is_safety_car_active():
             # During safety car, gap becomes less important (field bunched up)
@@ -688,11 +684,11 @@ class UndercutEngine:
         }
         
     # Return a list of all drivers
-    def get_all_drivers(self)-> List[str]:
+    def get_all_drivers(self)-> list[str]:
         return list(self.driver_state.keys())
     
     # Get driver state
-    def get_driver_state(self, driver: str) -> Optional[dict]:
+    def get_driver_state(self, driver: str) -> dict | None:
         return self.driver_state.get(driver, None)
     
     # Mark drivers as retired after 1 missed lap (immediate detection on DNF).
