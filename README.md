@@ -107,7 +107,7 @@ Every push and PR runs backend tests (`pytest`), lint (`ruff`), and frontend lin
 
 ## License
 
-MIT — see [LICENSE](LICENSE)
+MIT
 
 ## Contact
 
