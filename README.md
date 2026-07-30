@@ -107,8 +107,4 @@ Every push and PR runs backend tests (`pytest`), lint (`ruff`), and frontend lin
 
 ## License
 
-MIT
-
-## Contact
-
-Karan Gupta — [karangu1022@gmail.com](mailto:karangu1022@gmail.com)
+MIT — see [LICENSE](LICENSE). Questions or feedback: [@KaranGupta-1022](https://github.com/KaranGupta-1022)
