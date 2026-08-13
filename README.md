@@ -7,17 +7,17 @@
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![CI](https://github.com/KaranGupta-1022/f1_undercut_engine/actions/workflows/ci.yml/badge.svg)
 
-Real-time F1 race strategy predictions: a Kafka pipeline streams lap-by-lap telemetry from historical race sessions into a tyre-degradation model that flags viable undercut pit-stop windows, pushed live to a WebSocket dashboard as the race unfolds.
+## Overview
+
+An **undercut** is a pit-stop strategy where a driver pits for fresh tyres before a rival ahead of them, using the pace advantage of new rubber to build track position and jump the rival once they eventually stop. Deciding whether one is worth it means weighing tyre degradation, the pit-lane time loss, and the closing gap. Race strategists make that call lap by lap from the pit wall.
+
+This project reproduces that decision loop end to end. It replays historical F1 race sessions (via [FastF1](https://docs.fastf1.dev/)) through a Kafka pipeline, feeds each lap into a strategy engine that models tyre degradation and track position, and streams undercut pit-stop recommendations to a React dashboard in real time. Because the pipeline is event-driven rather than a batch script, the same architecture could sit in front of a live timing feed with no redesign. Only the producer would change.
 
 ## Demo
 
 ![demo](docs/demo.gif)
 
 *Live demo was deployed on a temporary GCP VM for testing and has since been taken down (see [DEPLOYMENT.md](DEPLOYMENT.md)).*
-
-## Overview
-
-This project replays historical F1 race sessions (via [FastF1](https://docs.fastf1.dev/)) through a Kafka pipeline, feeds each lap into a strategy engine that models tyre degradation and track position, and streams undercut pit-stop recommendations to a live React dashboard in real time.
 
 ## Features
 
@@ -34,15 +34,14 @@ This project replays historical F1 race sessions (via [FastF1](https://docs.fast
 
 ```mermaid
 flowchart LR
-    FF1[FastF1 API / cached session data] --> PROD[producer.py<br/>RaceSimulator]
-    PROD -->|JSON lap messages| KAFKA[(Kafka topic<br/>f1-telemetry)]
-    KAFKA --> APP[app.py<br/>kafka_listener thread]
-    APP --> ENGINE[UndercutEngine<br/>strategy_engine.py]
-    ENGINE --> APP
-    APP -->|race_update, undercut_alert,<br/>track_info, client_count| SOCKET[Flask-SocketIO]
-    SOCKET -->|WebSocket| REACT[React dashboard<br/>Vite]
-    APP -.driver state, predictions.-> REDIS[(Redis)]
-    APP -.provisioned, not yet written to.-> TSDB[(TimescaleDB)]
+    FF1["FastF1 API / cached session data"] --> PROD["producer.py<br/>RaceSimulator"]
+    PROD -->|JSON lap messages| KAFKA[("Kafka topic<br/>f1-telemetry")]
+    KAFKA --> APP["app.py<br/>kafka_listener thread"]
+    APP <--> ENGINE["UndercutEngine<br/>strategy_engine.py"]
+    APP -->|"race_update, undercut_alert,<br/>track_info, client_count"| SOCKET["Flask-SocketIO"]
+    SOCKET -->|WebSocket| REACT["React dashboard<br/>Vite"]
+    APP -. "driver state, predictions" .-> REDIS[("Redis")]
+    APP -. "provisioned, not yet written to" .-> TSDB[("TimescaleDB")]
 ```
 
 Full diagram and data contracts: [ARCHITECTURE.md](ARCHITECTURE.md)
